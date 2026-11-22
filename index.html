@@ -1,14 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f7f5f0" />
+    <meta name="theme-color" content="#10110f" />
     <meta
       name="description"
       content="A free music-making playground for ideas, moods, and melodies."
     />
     <title>Frostwave — make a little noise</title>
+    <script>
+      (() => {
+        const savedTheme = localStorage.getItem("frostwave-theme-v1");
+        document.documentElement.dataset.theme = savedTheme === "light" ? "light" : "dark";
+        if (savedTheme === "light") {
+          document.querySelector('meta[name="theme-color"]').content = "#f7f5f0";
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -55,7 +64,8 @@
           <div class="mobile-brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span> frostwave</div>
           <div class="breadcrumb"><span id="breadcrumb-label">Create</span><span class="breadcrumb-dot">/</span><span class="muted">Your next favorite</span></div>
           <div class="topbar-actions">
-          <button class="text-button" id="top-wallet-button">Sign in with wallet</button>
+            <button class="text-button theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme">☀</button>
+            <button class="text-button" id="top-wallet-button">Sign in with wallet</button>
             <button class="avatar top-avatar" id="top-avatar" aria-label="Account menu">♫</button>
           </div>
         </header>

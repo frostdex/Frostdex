@@ -1,4 +1,5 @@
 const AUTH_STORAGE_KEY = "frostwave-session-v1";
+const THEME_STORAGE_KEY = "frostwave-theme-v1";
 const API_BASE_URL = String(window.FROSTWAVE_CONFIG?.apiBaseUrl || "").replace(/\/+$/, "");
 const ideas = [
   "A warm, slow-dancing soul song for a kitchen at midnight",
@@ -13,6 +14,8 @@ const controlsPanel = document.querySelector("#custom-controls");
 const createButton = document.querySelector("#create-button");
 const messageArea = document.querySelector("#creation-message");
 const toastRegion = document.querySelector("#toast-region");
+const themeToggleButton = document.querySelector("#theme-toggle");
+const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 const audioReferenceInput = document.querySelector("#audio-reference-input");
 const audioReferencePreview = document.querySelector("#audio-reference-preview");
 const audioReferenceStatus = document.querySelector("#audio-reference-status");
@@ -30,6 +33,22 @@ let discoveries = [];
 let selectedReferenceAudio = null;
 let selectedReferenceAudioDuration = null;
 let referenceAudioObjectUrl = null;
+
+function updateTheme(theme) {
+  const isDark = theme === "dark";
+  document.documentElement.dataset.theme = isDark ? "dark" : "light";
+  themeColorMeta.content = isDark ? "#10110f" : "#f7f5f0";
+  themeToggleButton.textContent = isDark ? "☀" : "☾";
+  themeToggleButton.setAttribute("aria-label", `Switch to ${isDark ? "light" : "dark"} theme`);
+  themeToggleButton.setAttribute("aria-pressed", String(isDark));
+  localStorage.setItem(THEME_STORAGE_KEY, isDark ? "dark" : "light");
+}
+
+const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+updateTheme(savedTheme === "light" ? "light" : "dark");
+themeToggleButton.addEventListener("click", () => {
+  updateTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+});
 
 function showToast(message, isError = false) {
   const toast = document.createElement("div");
