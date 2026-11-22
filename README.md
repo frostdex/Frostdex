@@ -6,7 +6,7 @@ Frostwave is a static frontend plus a self-hosted Python GPU backend. The fronte
 
 1. Import this repository into Vercel.
 2. Set the build environment variable `FROSTWAVE_API_URL` to the public HTTPS **origin** of the GPU backend, for example `https://gpu-api.example.com` (no path or trailing API route).
-3. Deploy. The included `vercel.json` builds a static site into `dist`; Vercel does not run the GPU worker.
+3. Deploy. The included `vercel.json` builds a static site into `dist`; `.vercelignore` excludes the Python backend and its GPU-only dependencies so Vercel does not try to build them or run the GPU worker.
 4. Copy the exact Vercel site origin (including `https://`) for the backend's `FROSTWAVE_ALLOWED_ORIGINS` setting. Add each production or preview origin explicitly.
 
 `FROSTWAVE_API_URL` is public frontend configuration, not a secret. Do not put private keys, GPU credentials, or wallet secrets in Vercel's browser-exposed environment.
