@@ -54,7 +54,7 @@
           <div class="mobile-brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span> frostwave</div>
           <div class="breadcrumb"><span id="breadcrumb-label">Create</span><span class="breadcrumb-dot">/</span><span class="muted">Your next favorite</span></div>
           <div class="topbar-actions">
-            <button class="text-button" id="top-wallet-button">Connect wallet</button>
+          <button class="text-button" id="top-wallet-button">Sign in with wallet</button>
             <button class="avatar top-avatar" id="top-avatar" aria-label="Account menu">♫</button>
           </div>
         </header>
@@ -74,9 +74,9 @@
               </button>
             </div>
             <label class="sr-only" for="song-prompt">Describe the song you want to make</label>
-            <textarea id="song-prompt" maxlength="500" placeholder="A dreamy indie-folk song about driving home under a sky full of stars..."></textarea>
+            <textarea id="song-prompt" maxlength="1000" placeholder="A dreamy indie-folk song about driving home under a sky full of stars..."></textarea>
             <div class="prompt-footer">
-              <span class="character-count"><span id="prompt-count">0</span> / 500</span>
+              <span class="character-count"><span id="prompt-count">0</span> / 1000</span>
               <button class="shuffle-button" id="idea-button"><span aria-hidden="true">⤨</span> Surprise me</button>
             </div>
 
@@ -95,8 +95,8 @@
                 </div>
               </div>
               <div class="control-field lyrics-field">
-                <label for="lyrics-input">Lyrics <span class="optional">optional</span></label>
-                <textarea id="lyrics-input" maxlength="1500" placeholder="Write your own lyrics, or leave this blank to start with just an idea..."></textarea>
+                <label for="lyrics-input">Lyrics <span class="optional">required for vocals</span></label>
+                <textarea id="lyrics-input" maxlength="1500" placeholder="Write lyrics for vocal songs. Choose Instrumental to create without lyrics."></textarea>
               </div>
               <div class="control-row">
                 <div class="control-field">
@@ -116,6 +116,13 @@
                 <div class="range-control"><label for="warmth-range">Unexpectedness <span id="warmth-value">50</span></label><input id="warmth-range" type="range" min="0" max="100" value="50" /></div>
                 <div class="range-control"><label for="style-range">Style influence <span id="style-value">70</span></label><input id="style-range" type="range" min="0" max="100" value="70" /></div>
               </div>
+              <div class="control-row music-options-row">
+                <div class="control-field">
+                  <label for="music-duration">Song length</label>
+                  <select id="music-duration"><option value="60">1 minute</option><option value="120" selected>2 minutes</option><option value="240">4 minutes</option></select>
+                </div>
+                <label class="share-option"><input id="share-song" type="checkbox" /><span><strong>Share to Discover</strong><small>Let others play this song</small></span></label>
+              </div>
             </div>
 
             <div class="composer-bottom">
@@ -125,6 +132,7 @@
           </div>
 
           <div class="creation-message" id="creation-message" role="status" aria-live="polite"></div>
+          <div class="music-player-wrap" id="music-player-wrap" hidden><div class="music-player-label" id="music-player-label">Now playing</div><audio id="music-player" controls preload="none"></audio></div>
           <div class="library-preview" id="recently-made">
             <div class="section-heading">
               <div><div class="eyebrow small-eyebrow">YOUR LITTLE CORNER</div><h2>Recently made</h2></div>
@@ -185,6 +193,10 @@
               <a class="download-video" id="download-video" href="#" download>Download MP4 <span>↗</span></a>
             </div>
           </div>
+          <div class="generated-videos">
+            <div class="section-heading"><div><div class="eyebrow small-eyebrow">YOUR VIDEO LIBRARY</div><h2>Generated videos</h2></div></div>
+            <div class="video-job-list" id="video-job-list"></div>
+          </div>
           <div class="video-backend-note"><span class="note-icon">i</span><p>Five-minute videos are assembled from short generated shots and trimmed to exactly five minutes. Rendering is sequential and can take hours; the selected model's weights download the first time you use it. The local queue has no app-imposed generation cap.</p></div>
         </section>
 
@@ -212,6 +224,7 @@
     </div>
 
     <div class="toast-region" id="toast-region" aria-live="polite"></div>
+    <script src="config.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

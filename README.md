@@ -1,33 +1,50 @@
 # Frostwave
 
-Frostwave is an original music-making playground with a local, self-hosted AI video generator. The video page offers five model choices: Wan 2.1 (1.3B and 14B), Wan 2.2 (A14B), and CogVideoX (2B and 5B). It assembles model-generated shots into an MP4 trimmed to five minutes.
+Frostwave is a static frontend plus a self-hosted Python GPU backend. The frontend is prepared for Vercel; video and music generation, wallet-authenticated user data, and media storage stay on the GPU backend. Video generation offers Wan 2.1 (1.3B and 14B), Wan 2.2 (A14B), and CogVideoX (2B and 5B), and assembles generated shots into a five-minute MP4. Music generation uses the local ACE-Step model for songs up to four minutes.
 
-## Run the local generator
+## Deploy the frontend to Vercel
 
-The renderer needs a supported NVIDIA GPU, CUDA-enabled PyTorch, internet access for the first model download, and free disk space. Wan 2.1 1.3B is the smallest Wan option and needs about 8.2 GB of VRAM; CogVideoX 2B can use sequential CPU offload but will be slower. Larger models need substantially more GPU memory.
+1. Import this repository into Vercel.
+2. Set the build environment variable `FROSTWAVE_API_URL` to the public HTTPS **origin** of the GPU backend, for example `https://gpu-api.example.com` (no path or trailing API route).
+3. Deploy. The included `vercel.json` builds a static site into `dist`; Vercel does not run the GPU worker.
+4. Copy the exact Vercel site origin (including `https://`) for the backend's `FROSTWAVE_ALLOWED_ORIGINS` setting. Add each production or preview origin explicitly.
 
-1. Install a PyTorch build that matches your CUDA setup using the selector at [pytorch.org](https://pytorch.org/get-started/locally/).
-2. Install the remaining Python packages and start the app:
+`FROSTWAVE_API_URL` is public frontend configuration, not a secret. Do not put private keys, GPU credentials, or wallet secrets in Vercel's browser-exposed environment.
+
+## Run the GPU backend
+
+Use a persistent Linux host with a supported NVIDIA GPU, CUDA-enabled PyTorch, internet access for first model downloads, and disk space for generated media. Wan 2.1 1.3B needs about 8.2 GB of VRAM; CogVideoX 2B can use sequential CPU offload but will be slower. Larger models need substantially more VRAM. ACE-Step downloads its model weights on first use and needs additional GPU memory and storage.
+
+1. Install a PyTorch build matching the host's CUDA setup using [the PyTorch selector](https://pytorch.org/get-started/locally/).
+2. Install the backend requirements and launch it:
 
    ```sh
    python3 -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
+   cp .env.example .env
+   # Set FROSTWAVE_ALLOWED_ORIGINS to your exact Vercel site origin.
+   set -a && . ./.env && set +a
    python server.py
    ```
 
-3. Open `http://127.0.0.1:8000`, choose a generator, describe your video, and create it. The selected model's weights download on first use and are cached by Hugging Face.
+3. Put the backend behind HTTPS using a reverse proxy or a trusted TLS ingress. The server itself binds to loopback by default. `FROSTWAVE_BIND_HOST=0.0.0.0` enables access through the host's network interface; do not expose the plain HTTP port directly to the internet.
+4. Keep `FROSTWAVE_DATA_DIR` on a persistent disk/volume. SQLite holds wallet sessions and job history there; MP4s and WAVs are saved under its `videos/` and `music/` directories. Back up this directory. Optionally set `FROSTWAVE_VIDEO_RETENTION_DAYS` to automatically remove completed/failed media at startup; its default `0` keeps media indefinitely.
 
-The local server binds to loopback only. Generated MP4 files are stored in `~/.frostwave/videos` by default; set `FROSTWAVE_DATA_DIR` to use another local folder. `FROSTWAVE_PORT` changes the default port.
+For local development, leave the bind host unset, set allowed origins to `http://127.0.0.1:8000,http://localhost:8000`, and open `http://127.0.0.1:8000`.
 
-## Limits and expectations
+## Wallet and generation behavior
 
-- There are no app-imposed generation quotas, paid tiers, or API fees. Jobs run one at a time on the local GPU; the queue has no generation-count cap. Actual throughput and storage are limited by the computer's GPU, power, and disk.
-- A five-minute result is made from many short generated shots and trimmed to exactly 300 seconds. Model continuity between independently generated shots can vary.
-- Five minutes of video is expensive to render locally: Wan 2.1 1.3B is documented at roughly four minutes per five-second clip on an RTX 4090, so a five-minute result can take several hours, plus assembly time.
-- Audio generation and community audio playback are not connected. Video rendering currently produces a silent MP4.
-- Wallet connection reads the active address from an injected EVM wallet. It does not sign a message or verify identity with a server, and signing out only disconnects the app's local session.
+- Sign-in uses an EIP-4361-style one-time challenge signed by the wallet. The server verifies the signature, stores only a hash of the revocable session token, and scopes video and music jobs to the wallet address. No Google account, email, or on-chain transaction is required.
+- There are no app-imposed generation-count quotas or paid API calls. Work is queued one-at-a-time on the GPU. Compute time, power, storage, and model licenses still apply.
+- Five minutes of video is assembled from many short shots and trimmed to exactly 300 seconds. Independent shots may not maintain perfect continuity. Wan 2.1 1.3B is documented at roughly four minutes per five-second clip on an RTX 4090, so a five-minute video can take several hours.
+- The MP4 output is silent. Music jobs are generated locally by ACE-Step; songs appear in the private library by default, and only songs explicitly shared by their creator appear in Discover. The first generation downloads the ACE-Step model weights.
+- Vercel deploys only the static website. It cannot run this long-lived GPU worker or persist its SQLite database/video files.
 
-## Tests
+## Tests and build
 
-Run the backend validation tests with `python3 -m unittest discover -s tests`.
+```sh
+node --check app.js
+npm run build
+python3 -m unittest discover -s tests
+```

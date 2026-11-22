@@ -1,4 +1,5 @@
-const STORAGE_KEY = "frostwave-library-v1";
+const AUTH_STORAGE_KEY = "frostwave-session-v1";
+const API_BASE_URL = String(window.FROSTWAVE_CONFIG?.apiBaseUrl || "").replace(/\/+$/, "");
 const ideas = [
   "A warm, slow-dancing soul song for a kitchen at midnight",
   "An instrumental soundtrack for getting lost in a new city",
@@ -6,15 +7,6 @@ const ideas = [
   "A hazy lo-fi beat for watching the rain from the window",
   "A playful funk groove about a dog who thinks it's a detective",
 ];
-const discoveries = [
-  { title: "Window Seat", artist: "mira june", genre: "Chill", art: "art-peach", symbol: "☼", description: "Soft soul · late afternoon" },
-  { title: "Little Satellites", artist: "daytrip club", genre: "Indie", art: "art-blue", symbol: "✳", description: "Bedroom pop · finding your people" },
-  { title: "Blue Hour Loop", artist: "softsignal", genre: "Electronic", art: "art-lilac", symbol: "◌", description: "Downtempo · just before night" },
-  { title: "Sunday in the Kitchen", artist: "juniper lane", genre: "Indie", art: "art-green", symbol: "❋", description: "Indie folk · homemade pancakes" },
-  { title: "Half Past Somewhere", artist: "lowbeam", genre: "Hip-hop", art: "art-night", symbol: "☾", description: "Lo-fi hip-hop · after the last train" },
-  { title: "Peach Static", artist: "monte rosa", genre: "Electronic", art: "art-pink", symbol: "〰", description: "Dream pop · drifting out to sea" },
-];
-
 const promptInput = document.querySelector("#song-prompt");
 const promptCount = document.querySelector("#prompt-count");
 const controlsPanel = document.querySelector("#custom-controls");
@@ -25,25 +17,10 @@ let chosenVocal = "With vocals";
 let libraryFilter = "all";
 let walletAddress = null;
 let activeVideoJob = null;
-let tracks = readTracks();
-
-function readTracks() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    return Array.isArray(saved) ? saved.filter((track) => track && typeof track.id === "string" && typeof track.title === "string") : [];
-  } catch (error) {
-    showToast("Couldn't read your saved library. New tracks will still work for this session.", true);
-    return [];
-  }
-}
-
-function persistTracks() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tracks));
-  } catch (error) {
-    showToast("This browser couldn't save your library. Your changes are still visible until you leave.", true);
-  }
-}
+let activeMusicJob = null;
+let sessionToken = sessionStorage.getItem(AUTH_STORAGE_KEY);
+let tracks = [];
+let discoveries = [];
 
 function showToast(message, isError = false) {
   const toast = document.createElement("div");
@@ -65,12 +42,22 @@ function formatAddress(address) {
 
 function updateWalletUi() {
   const name = walletAddress ? formatAddress(walletAddress) : "Your space";
-  const subtitle = walletAddress ? "Wallet connected" : "Connect a wallet";
+  const subtitle = walletAddress ? "Verified wallet" : "Sign in with a wallet";
   document.querySelector("#profile-name").textContent = name;
   document.querySelector("#profile-subtitle").textContent = subtitle;
   document.querySelector("#avatar").textContent = walletAddress ? "✳" : "♫";
   document.querySelector("#top-avatar").textContent = walletAddress ? "✳" : "♫";
-  document.querySelector("#top-wallet-button").textContent = walletAddress ? "Sign out" : "Connect wallet";
+  document.querySelector("#top-wallet-button").textContent = walletAddress ? "Sign out" : "Sign in with wallet";
+}
+
+function apiUrl(path) {
+  return `${API_BASE_URL}${path}`;
+}
+
+function apiFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
+  return fetch(apiUrl(path), { ...options, headers });
 }
 
 async function connectWallet() {
@@ -84,33 +71,82 @@ async function connectWallet() {
     if (!Array.isArray(accounts) || typeof accounts[0] !== "string") {
       throw new Error("The wallet didn't return an account.");
     }
-    walletAddress = accounts[0];
+    const chainIdHex = await provider.request({ method: "eth_chainId" });
+    const chainId = Number.parseInt(chainIdHex, 16);
+    if (!Number.isSafeInteger(chainId) || chainId < 1) throw new Error("The wallet returned an invalid network.");
+    const challengeResponse = await apiFetch("/api/auth/nonce", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: accounts[0], chain_id: chainId }),
+    });
+    const challenge = await readApiResponse(challengeResponse);
+    const signature = await provider.request({
+      method: "personal_sign",
+      params: [challenge.message, accounts[0]],
+    });
+    const verifyResponse = await apiFetch("/api/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: accounts[0], nonce: challenge.nonce, signature }),
+    });
+    const session = await readApiResponse(verifyResponse);
+    sessionToken = session.token;
+    sessionStorage.setItem(AUTH_STORAGE_KEY, sessionToken);
+    walletAddress = session.address;
     updateWalletUi();
-    showToast(`Wallet connected: ${formatAddress(walletAddress)}.`);
+    showToast(`Signed in as ${formatAddress(walletAddress)}.`);
+    loadVideoJobs();
+    loadMusicJobs();
   } catch (error) {
     if (error && error.code === 4001) {
       showToast("Wallet connection was cancelled.");
       return;
     }
-    showToast(error instanceof Error ? `Couldn't connect wallet: ${error.message}` : "Couldn't connect wallet.", true);
+    showToast(error instanceof Error ? `Couldn't sign in: ${error.message}` : "Couldn't sign in.", true);
   }
 }
 
 async function restoreWallet() {
-  if (!window.ethereum || typeof window.ethereum.request !== "function") return;
-  try {
-    const accounts = await window.ethereum.request({ method: "eth_accounts" });
-    walletAddress = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : null;
+  if (!sessionToken) {
     updateWalletUi();
+    return;
+  }
+  try {
+    const response = await apiFetch("/api/auth/me");
+    const session = await readApiResponse(response);
+    walletAddress = session.address;
+    updateWalletUi();
+    await loadVideoJobs();
+    await loadMusicJobs();
   } catch (error) {
-    showToast(error instanceof Error ? `Couldn't check wallet connection: ${error.message}` : "Couldn't check wallet connection.", true);
+    sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    sessionToken = null;
+    walletAddress = null;
+    updateWalletUi();
+    showToast(error instanceof Error ? `Your sign-in expired: ${error.message}` : "Your sign-in expired.", true);
   }
 }
 
-function signOut() {
+async function signOut() {
+  if (sessionToken) {
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch (error) {
+      showToast(error instanceof Error ? `Local sign-out; server session revocation failed: ${error.message}` : "Local sign-out; server session revocation failed.", true);
+    }
+  }
+  sessionStorage.removeItem(AUTH_STORAGE_KEY);
+  sessionToken = null;
   walletAddress = null;
+  activeVideoJob = null;
+  activeMusicJob = null;
+  videoButton.disabled = false;
+  videoOutput.hidden = true;
+  renderVideoJobs([]);
+  tracks = [];
+  renderLibrary();
   updateWalletUi();
-  showToast("Signed out of Frostwave. Your connected wallet is unchanged.");
+  showToast("Signed out. Your wallet itself is unchanged.");
 }
 
 function updatePromptCount() {
@@ -119,17 +155,21 @@ function updatePromptCount() {
 
 function renderTrack(track) {
   const favoriteLabel = track.favorite ? "Remove from favorites" : "Add to favorites";
+  const isComplete = track.status === "complete";
+  const genre = track.genre || "New idea";
+  const description = `${genre} · ${track.duration ? `${Math.round(track.duration / 60)} min` : track.status === "failed" ? track.message : track.message || "Song idea"}`;
   return `<div class="track-row">
-    <div class="track-art ${escapeHtml(track.art || "art-peach")}" aria-hidden="true"><span>${escapeHtml(track.symbol || "♫")}</span></div>
-    <div class="track-info"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.description || "New idea · Just now")}</span></div>
-    <span class="track-badge">${escapeHtml(track.genre || "New idea")}</span>
-    <div class="track-actions"><button class="icon-button" data-action="preview" data-id="${escapeHtml(track.id)}" aria-label="Preview ${escapeHtml(track.title)}">▶</button><button class="icon-button${track.favorite ? " favorite" : ""}" data-action="favorite" data-id="${escapeHtml(track.id)}" aria-label="${favoriteLabel}" title="${favoriteLabel}">${track.favorite ? "♥" : "♡"}</button></div>
+    <div class="track-art art-peach" aria-hidden="true"><span>♫</span></div>
+    <div class="track-info"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(description)}</span></div>
+    <span class="track-badge">${escapeHtml(track.status || genre)}</span>
+    <div class="track-actions"><button class="icon-button" data-action="preview-music" data-id="${escapeHtml(track.id)}" aria-label="Play ${escapeHtml(track.title)}" ${isComplete ? "" : "disabled"}>▶</button><button class="icon-button${track.favorite ? " favorite" : ""}" data-action="favorite-music" data-id="${escapeHtml(track.id)}" aria-label="${favoriteLabel}" title="${favoriteLabel}">${track.favorite ? "♥" : "♡"}</button></div>
   </div>`;
 }
 
 function renderLibrary() {
   const visibleTracks = tracks.filter((track) => libraryFilter !== "favorites" || track.favorite);
-  document.querySelector("#recent-track-list").innerHTML = tracks.slice(0, 3).map(renderTrack).join("");
+  document.querySelector("#recent-track-list").innerHTML = tracks.slice(0, 3).map(renderTrack).join("")
+    || '<div class="video-list-empty">Sign in and make a song to start your library.</div>';
   document.querySelector("#library-track-list").innerHTML = visibleTracks.map(renderTrack).join("");
   document.querySelector("#library-total").textContent = `${visibleTracks.length} ${visibleTracks.length === 1 ? "track" : "tracks"}`;
   document.querySelector("#empty-library").hidden = visibleTracks.length !== 0;
@@ -139,17 +179,17 @@ function renderLibrary() {
 function renderDiscover(filter = "All", query = "") {
   const normalizedQuery = query.trim().toLowerCase();
   const matches = discoveries.filter((track) => (filter === "All" || track.genre === filter)
-    && `${track.title} ${track.artist} ${track.genre} ${track.description}`.toLowerCase().includes(normalizedQuery));
+    && `${track.title} ${track.artist} ${track.genre} ${track.prompt || ""}`.toLowerCase().includes(normalizedQuery));
   document.querySelector("#discover-grid").innerHTML = matches.length
-    ? matches.map((track, index) => `<article class="discover-card">
-        <div class="card-art ${track.art}" aria-label="${escapeHtml(track.description)}"><span>${track.symbol}</span>
-          <button class="play-card" data-action="preview" data-id="community-${index}" aria-label="Preview ${escapeHtml(track.title)}">▶</button>
+    ? matches.map((track) => `<article class="discover-card">
+        <div class="card-art art-lilac" aria-label="${escapeHtml(track.genre)}"><span>♫</span>
+          <button class="play-card" data-action="preview-music" data-id="${escapeHtml(track.id)}" aria-label="Play ${escapeHtml(track.title)}">▶</button>
         </div>
         <div class="card-meta"><div class="track-info"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)} · ${escapeHtml(track.genre)}</span></div>
-          <button class="icon-button" data-action="remix" data-title="${escapeHtml(track.title)}" aria-label="Use ${escapeHtml(track.title)} as inspiration" title="Use as inspiration">↗</button>
+          <button class="icon-button" data-action="remix" data-title="${escapeHtml(track.title)}" data-genre="${escapeHtml(track.genre)}" aria-label="Use ${escapeHtml(track.title)} as inspiration" title="Use as inspiration">↗</button>
         </div>
       </article>`).join("")
-    : '<div class="no-results">No tracks found. Try another search or genre.</div>';
+    : `<div class="no-results">${discoveries.length ? "No tracks found. Try another search or genre." : "Community songs people choose to share will appear here."}</div>`;
 }
 
 function switchView(name) {
@@ -161,7 +201,15 @@ function switchView(name) {
 }
 
 document.querySelectorAll("[data-view]").forEach((button) => {
-  button.addEventListener("click", () => switchView(button.dataset.view));
+  button.addEventListener("click", () => {
+    const view = button.dataset.view;
+    switchView(view);
+    if (view === "discover") loadDiscover();
+    if (view === "library" && sessionToken) {
+      loadMusicJobs();
+      loadVideoJobs();
+    }
+  });
 });
 
 document.querySelector("#top-wallet-button").addEventListener("click", () => walletAddress ? signOut() : connectWallet());
@@ -187,6 +235,13 @@ document.querySelectorAll("[data-vocal]").forEach((button) => {
   button.addEventListener("click", () => {
     chosenVocal = button.dataset.vocal;
     document.querySelectorAll("[data-vocal]").forEach((option) => option.classList.toggle("selected", option === button));
+    const lyricsInput = document.querySelector("#lyrics-input");
+    const lyricsLabel = document.querySelector('label[for="lyrics-input"] .optional');
+    lyricsInput.disabled = chosenVocal === "Instrumental";
+    lyricsInput.placeholder = chosenVocal === "Instrumental"
+      ? "Instrumental songs don't use lyrics."
+      : "Write lyrics for vocal songs.";
+    lyricsLabel.textContent = chosenVocal === "Instrumental" ? "not used for instrumental" : "required for vocals";
   });
 });
 
@@ -195,7 +250,7 @@ for (const [inputId, valueId] of [["warmth-range", "warmth-value"], ["style-rang
   range.addEventListener("input", () => { document.getElementById(valueId).textContent = range.value; });
 }
 
-createButton.addEventListener("click", () => {
+createButton.addEventListener("click", async () => {
   const prompt = promptInput.value.trim();
   if (!prompt) {
     messageArea.textContent = "Add a few words about your song first.";
@@ -206,30 +261,46 @@ createButton.addEventListener("click", () => {
   const genre = document.querySelector("#genre-select").value;
   const mood = document.querySelector("#mood-select").value;
   const lyrics = document.querySelector("#lyrics-input").value.trim();
-  const title = customTitle || prompt.split(/[.!?]/)[0].split(/\s+/).slice(0, 5).join(" ");
+  if (chosenVocal === "With vocals" && !lyrics) {
+    messageArea.textContent = "Add lyrics for a vocal song, or choose Instrumental.";
+    document.querySelector("#lyrics-input").focus();
+    return;
+  }
+  if (!sessionToken) {
+    showToast("Sign in with your wallet to generate and save music.", true);
+    connectWallet();
+    return;
+  }
+  const title = customTitle || prompt.split(/[.!?]/)[0].split(/\s+/).slice(0, 5).join(" ") || "A new idea";
   createButton.disabled = true;
-  createButton.querySelector("span:first-child").textContent = "Saving your idea…";
+  createButton.querySelector("span:first-child").textContent = "Sending to your GPU…";
   messageArea.textContent = "";
-  window.setTimeout(() => {
-    const track = {
-      id: `local-${Date.now()}`,
-      title: title || "A new idea",
-      description: `${genre === "Surprise me" ? mood : genre} · ${chosenVocal === "Instrumental" ? "Instrumental" : "Song idea"}${lyrics ? " · Your lyrics" : ""}`,
-      genre: genre === "Surprise me" ? "New idea" : genre,
-      prompt,
-      art: ["art-peach", "art-blue", "art-lilac", "art-green", "art-pink"][tracks.length % 5],
-      symbol: ["♫", "✳", "☼", "◌", "〰"][tracks.length % 5],
-      favorite: false,
-      createdAt: new Date().toISOString(),
-    };
-    tracks.unshift(track);
-    persistTracks();
-    renderLibrary();
+  try {
+    const response = await apiFetch("/api/music/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        prompt,
+        lyrics,
+        genre: genre === "Surprise me" ? mood : genre,
+        vocal_style: chosenVocal,
+        duration: Number(document.querySelector("#music-duration").value),
+        is_public: document.querySelector("#share-song").checked,
+      }),
+    });
+    const job = await readApiResponse(response);
+    activeMusicJob = job.id;
+    await loadMusicJobs();
+    pollMusicJob(job.id);
+    messageArea.textContent = "Your song is queued on your local GPU. You can follow its progress in Your library.";
+  } catch (error) {
+    messageArea.textContent = error.message;
+    showToast(`Couldn't start music generation: ${error.message}`, true);
+  } finally {
     createButton.disabled = false;
     createButton.querySelector("span:first-child").textContent = "Make my song";
-    messageArea.textContent = "Your idea is in your library. Audio generation needs a music-generation service, which isn't connected yet.";
-    document.querySelector("#recently-made").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, 450);
+  }
 });
 
 document.querySelectorAll(".filter-tab").forEach((button) => {
@@ -244,6 +315,18 @@ document.querySelector("#discover-search").addEventListener("input", (event) => 
   renderDiscover(selectedFilter, event.currentTarget.value);
 });
 
+async function loadDiscover() {
+  try {
+    const response = await apiFetch("/api/discover");
+    const data = await readApiResponse(response);
+    discoveries = Array.isArray(data.tracks) ? data.tracks : [];
+    const selectedFilter = document.querySelector(".filter-tab.active")?.dataset.filter || "All";
+    renderDiscover(selectedFilter, document.querySelector("#discover-search").value);
+  } catch (error) {
+    showToast(`Couldn't load Discover: ${error.message}`, true);
+  }
+}
+
 const videoPrompt = document.querySelector("#video-prompt");
 const videoButton = document.querySelector("#create-video-button");
 const videoStatus = document.querySelector("#video-status");
@@ -253,26 +336,26 @@ const videoOutput = document.querySelector("#video-output");
 async function readApiResponse(response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(typeof data.error === "string" ? data.error : `Local video service returned ${response.status}.`);
+    throw new Error(typeof data.error === "string" ? data.error : `Frostwave API returned ${response.status}.`);
   }
   return data;
 }
 
 async function checkVideoEngine() {
   try {
-    const response = await fetch("/api/video/health");
+    const response = await apiFetch("/api/video/health");
     const health = await readApiResponse(response);
     videoStatus.textContent = health.ready
       ? `Local GPU ready${health.gpu ? ` · ${health.gpu}` : ""}. No app generation cap.`
       : health.message;
   } catch (error) {
-    videoStatus.textContent = "Local engine not running. Start it with `python server.py`.";
+    videoStatus.textContent = error instanceof Error ? error.message : "The GPU backend couldn't be reached.";
   }
 }
 
 async function pollVideoJob(jobId) {
   try {
-    const response = await fetch(`/api/video/jobs/${encodeURIComponent(jobId)}`);
+    const response = await apiFetch(`/api/video/jobs/${encodeURIComponent(jobId)}`);
     const job = await readApiResponse(response);
     videoProgress.hidden = false;
     document.querySelector("#video-progress-bar").max = job.total_clips || 60;
@@ -283,13 +366,11 @@ async function pollVideoJob(jobId) {
 
     if (job.status === "complete") {
       videoStatus.textContent = "Your five-minute video is ready.";
-      videoOutput.hidden = false;
-      const videoUrl = `${job.video_url}?t=${Date.now()}`;
-      document.querySelector("#generated-video").src = videoUrl;
-      document.querySelector("#download-video").href = job.video_url;
       videoButton.disabled = false;
       videoButton.querySelector("span:first-child").textContent = "Create another video";
       activeVideoJob = null;
+      await openVideo(jobId);
+      loadVideoJobs();
       return;
     }
     if (job.status === "failed") {
@@ -311,6 +392,121 @@ async function pollVideoJob(jobId) {
   }
 }
 
+function renderVideoJobs(jobs) {
+  const container = document.querySelector("#video-job-list");
+  if (!jobs.length) {
+    container.innerHTML = '<div class="video-list-empty">Your generated videos will show up here.</div>';
+    return;
+  }
+  container.innerHTML = jobs.map((job) => {
+    const isComplete = job.status === "complete";
+    const title = job.prompt || job.model;
+    const status = isComplete ? "Ready · 5 minutes" : `${job.status} · ${job.progress}%`;
+    return `<div class="video-job-row">
+      <div class="video-job-icon">${isComplete ? "▶" : "◌"}</div>
+      <div class="video-job-copy"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(job.model)} · ${escapeHtml(status)}</span></div>
+      ${isComplete
+        ? `<button class="subtle-link" data-action="open-video" data-id="${escapeHtml(job.id)}">Play / download ↗</button>`
+        : `<span class="track-badge">${escapeHtml(job.message)}</span>`}
+    </div>`;
+  }).join("");
+}
+
+async function loadVideoJobs() {
+  if (!sessionToken) return;
+  try {
+    const response = await apiFetch("/api/video/jobs");
+    const data = await readApiResponse(response);
+    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    renderVideoJobs(jobs);
+    const activeJob = jobs.find((job) => ["queued", "loading", "rendering", "assembling"].includes(job.status));
+    if (activeJob && activeJob.id !== activeVideoJob) {
+      activeVideoJob = activeJob.id;
+      videoButton.disabled = true;
+      videoButton.querySelector("span:first-child").textContent = "Rendering…";
+      pollVideoJob(activeJob.id);
+    }
+  } catch (error) {
+    showToast(`Couldn't load your video library: ${error.message}`, true);
+  }
+}
+
+async function openVideo(jobId) {
+  try {
+    const ticketResponse = await apiFetch(`/api/video/jobs/${encodeURIComponent(jobId)}/ticket`, { method: "POST" });
+    const ticket = await readApiResponse(ticketResponse);
+    const mediaUrl = apiUrl(ticket.video_url);
+    const video = document.querySelector("#generated-video");
+    video.crossOrigin = "anonymous";
+    video.src = mediaUrl;
+    document.querySelector("#download-video").href = `${mediaUrl}&download=1`;
+    document.querySelector("#video-output").hidden = false;
+  } catch (error) {
+    showToast(`Couldn't open your video: ${error.message}`, true);
+  }
+}
+
+async function playMusic(jobId) {
+  try {
+    const response = await apiFetch(`/api/music/jobs/${encodeURIComponent(jobId)}/ticket`, { method: "POST" });
+    const ticket = await readApiResponse(response);
+    const audioUrl = apiUrl(ticket.audio_url);
+    const player = document.querySelector("#music-player");
+    const track = [...tracks, ...discoveries].find((item) => item.id === jobId);
+    player.src = audioUrl;
+    document.querySelector("#music-player-label").textContent = `Now playing · ${track?.title || "Frostwave song"}`;
+    document.querySelector("#music-player-wrap").hidden = false;
+    await player.play();
+    switchView("create");
+  } catch (error) {
+    showToast(`Couldn't play this song: ${error.message}`, true);
+  }
+}
+
+async function loadMusicJobs() {
+  if (!sessionToken) {
+    tracks = [];
+    renderLibrary();
+    return;
+  }
+  try {
+    const response = await apiFetch("/api/music/jobs");
+    const data = await readApiResponse(response);
+    tracks = Array.isArray(data.jobs) ? data.jobs : [];
+    renderLibrary();
+  } catch (error) {
+    showToast(`Couldn't load your music library: ${error.message}`, true);
+  }
+}
+
+async function pollMusicJob(jobId) {
+  try {
+    const response = await apiFetch(`/api/music/jobs/${encodeURIComponent(jobId)}`);
+    const job = await readApiResponse(response);
+    if (job.status === "complete") {
+      activeMusicJob = null;
+      messageArea.textContent = "Your song is ready.";
+      await loadMusicJobs();
+      await playMusic(jobId);
+      loadDiscover();
+      return;
+    }
+    if (job.status === "failed") {
+      activeMusicJob = null;
+      messageArea.textContent = `Music generation failed: ${job.message}`;
+      await loadMusicJobs();
+      showToast(job.message, true);
+      return;
+    }
+    messageArea.textContent = job.message;
+    window.setTimeout(() => pollMusicJob(jobId), 5000);
+  } catch (error) {
+    activeMusicJob = null;
+    messageArea.textContent = `Couldn't check song progress: ${error.message}`;
+    showToast(error.message, true);
+  }
+}
+
 videoPrompt.addEventListener("input", () => {
   document.querySelector("#video-prompt-count").textContent = String(videoPrompt.value.length);
 });
@@ -327,7 +523,7 @@ videoButton.addEventListener("click", async () => {
   videoOutput.hidden = true;
   videoProgress.hidden = true;
   try {
-    const response = await fetch("/api/video/jobs", {
+    const response = await apiFetch("/api/video/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -361,18 +557,17 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const { action, id } = button.dataset;
-  if (action === "favorite") {
-    const track = tracks.find((item) => item.id === id);
-    if (!track) return;
-    track.favorite = !track.favorite;
-    persistTracks();
-    renderLibrary();
-  } else if (action === "preview" && id.startsWith("community-")) {
-    showToast("Community audio previews will be available when an audio catalogue is connected.");
-  } else if (action === "preview") {
-    showToast("This saved idea is a text-only prototype; audio generation isn't connected yet.");
+  if (action === "open-video") {
+    openVideo(id);
+  } else if (action === "favorite-music") {
+    apiFetch(`/api/music/jobs/${encodeURIComponent(id)}/favorite`, { method: "POST" })
+      .then(readApiResponse)
+      .then(loadMusicJobs)
+      .catch((error) => showToast(`Couldn't update favorite: ${error.message}`, true));
+  } else if (action === "preview-music") {
+    playMusic(id);
   } else if (action === "remix") {
-    promptInput.value = `A fresh idea inspired by "${button.dataset.title}" — make it your own`;
+    promptInput.value = `An original ${button.dataset.genre} song inspired by the feeling of "${button.dataset.title}", with its own melody and story`;
     updatePromptCount();
     switchView("create");
     promptInput.focus();
@@ -381,9 +576,10 @@ document.addEventListener("click", (event) => {
 
 if (window.ethereum && typeof window.ethereum.on === "function") {
   window.ethereum.on("accountsChanged", (accounts) => {
-    walletAddress = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : null;
-    updateWalletUi();
-    if (!walletAddress) showToast("Wallet disconnected from this app.");
+    if (walletAddress && (!Array.isArray(accounts) || accounts[0]?.toLowerCase() !== walletAddress.toLowerCase())) {
+      signOut();
+      showToast("Wallet account changed. Sign in again to continue.");
+    }
   });
 }
 
