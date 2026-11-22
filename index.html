@@ -16,6 +16,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="audio-upload.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -79,6 +80,28 @@
               <span class="character-count"><span id="prompt-count">0</span> / 1000</span>
               <button class="shuffle-button" id="idea-button"><span aria-hidden="true">⤨</span> Surprise me</button>
             </div>
+
+            <section class="audio-reference" aria-labelledby="audio-reference-title">
+              <div class="audio-reference-heading">
+                <div><span class="step-number">02</span><span class="composer-label" id="audio-reference-title">Start from an audio clip</span></div>
+                <span class="optional">Optional</span>
+              </div>
+              <p>Upload a clip to guide the sound and feel of your new track. Your audio stays private.</p>
+              <input id="audio-reference-input" type="file" accept=".wav,.mp3,.flac,.ogg,audio/wav,audio/mpeg,audio/flac,audio/ogg" hidden />
+              <button class="audio-dropzone" id="audio-reference-browse" type="button">
+                <span class="audio-upload-icon" aria-hidden="true">↑</span>
+                <span><strong>Choose an audio file</strong><small>or drop it here · WAV, MP3, FLAC, OGG · up to 32 MB</small></span>
+              </button>
+              <div class="audio-reference-selected" id="audio-reference-selected" hidden>
+                <div class="audio-reference-file">
+                  <span class="audio-file-icon" aria-hidden="true">♫</span>
+                  <span class="audio-reference-name" id="audio-reference-name"></span>
+                  <button class="audio-reference-remove" id="audio-reference-remove" type="button" aria-label="Remove audio reference">×</button>
+                </div>
+                <audio id="audio-reference-preview" controls preload="metadata"></audio>
+              </div>
+              <div class="audio-reference-status" id="audio-reference-status" role="status" aria-live="polite"></div>
+            </section>
 
             <div class="custom-controls" id="custom-controls" hidden>
               <div class="control-row">

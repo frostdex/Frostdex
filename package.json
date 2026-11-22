@@ -4,5 +4,11 @@
   "private": true,
   "scripts": {
     "build": "node scripts/build.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "dependencies": {
+    "@walletconnect/ethereum-provider": "2.26.0"
   }
 }

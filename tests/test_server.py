@@ -1,7 +1,11 @@
 import math
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from server import MODEL_IDS, VIDEO_SECONDS, dimensions_for, validate_request
+import music_engine
+from server import MODEL_IDS, VIDEO_SECONDS, audio_upload_extension, dimensions_for, validate_request
 
 
 class VideoGeneratorTests(unittest.TestCase):
@@ -37,6 +41,61 @@ class VideoGeneratorTests(unittest.TestCase):
         })
         self.assertEqual(request["prompt"], "A quiet mountain lake at sunrise.")
         self.assertEqual(request["model"], "cogvideo-2b")
+
+
+class AudioUploadTests(unittest.TestCase):
+    def test_detects_supported_audio_signatures(self):
+        samples = {
+            "wav": b"RIFF\x00\x00\x00\x00WAVE",
+            "flac": b"fLaC",
+            "ogg": b"OggS",
+            "mp3": b"ID3\x04",
+        }
+        for expected, data in samples.items():
+            with self.subTest(format=expected):
+                self.assertEqual(audio_upload_extension(data), expected)
+
+    def test_rejects_non_audio_files_and_oversized_uploads(self):
+        with self.assertRaisesRegex(ValueError, "WAV, MP3, FLAC, or OGG"):
+            audio_upload_extension(b"not audio")
+        with patch("server.MAX_AUDIO_UPLOAD_BYTES", 8):
+            with self.assertRaisesRegex(ValueError, "32 MB or smaller"):
+                audio_upload_extension(b"RIFF\x00\x00\x00\x00WAVE")
+
+    def test_reference_audio_is_owner_scoped_and_has_bounded_duration(self):
+        reference_id = "123e4567-e89b-12d3-a456-426614174000"
+        request = {
+            "prompt": "A gentle song",
+            "title": "Gentle song",
+            "lyrics": "A little melody",
+            "genre": "Indie",
+            "duration": 90,
+            "vocal_style": "With vocals",
+            "is_public": False,
+            "reference_audio_id": reference_id,
+        }
+        validated = music_engine.validate_request(request)
+        self.assertEqual(validated["duration"], 90)
+        self.assertEqual(validated["reference_audio_id"], reference_id)
+
+        with self.assertRaisesRegex(ValueError, "uploaded reference audio is invalid"):
+            music_engine.validate_request({**request, "reference_audio_id": "../other-user"})
+        with self.assertRaisesRegex(ValueError, "1–240 seconds"):
+            music_engine.validate_request({**request, "duration": 241})
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            music_engine, "MUSIC_ROOT", Path(temp_dir)
+        ):
+            owner_directory = music_engine.audio_reference_directory("0x1234")
+            owner_directory.mkdir(parents=True)
+            owner_path = owner_directory / f"{reference_id}.wav"
+            owner_path.write_bytes(b"audio")
+            self.assertEqual(music_engine.find_audio_reference("0x1234", reference_id), owner_path)
+            self.assertIsNone(music_engine.find_audio_reference("0x5678", reference_id))
+            self.assertNotEqual(
+                owner_directory,
+                music_engine.audio_reference_directory("0x5678"),
+            )
 
 
 if __name__ == "__main__":

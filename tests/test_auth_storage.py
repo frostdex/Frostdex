@@ -145,10 +145,35 @@ class AuthStorageTests(unittest.TestCase):
         self.assertEqual(pipeline.arguments["audio_duration"], 60)
         self.assertEqual(pipeline.arguments["lyrics"], request["lyrics"])
         self.assertTrue(pipeline.arguments["manual_seeds"].isdigit())
+        self.assertFalse(pipeline.arguments["audio2audio_enable"])
         self.assertEqual(
             storage.get_music_job("music-job", "0x" + "34" * 20)["status"],
             "complete",
         )
+
+        reference_id = "123e4567-e89b-12d3-a456-426614174000"
+        reference_request = {**request, "reference_audio_id": reference_id}
+        storage.create_music_job(
+            {
+                "id": "music-job-with-reference",
+                "address": "0x" + "34" * 20,
+                "request": reference_request,
+                "status": "queued",
+                "message": "Waiting",
+                "is_public": False,
+                "created_at": 2,
+            }
+        )
+        reference_path = music_root / "references" / "reference.wav"
+        reference_path.parent.mkdir(parents=True, exist_ok=True)
+        reference_path.write_bytes(b"reference")
+        with patch.object(music_engine, "MUSIC_ROOT", music_root), patch.object(
+            music_engine, "get_pipeline", return_value=pipeline
+        ):
+            music_engine.render_music("music-job-with-reference", reference_request, reference_path)
+        self.assertTrue(pipeline.arguments["audio2audio_enable"])
+        self.assertEqual(pipeline.arguments["ref_audio_input"], str(reference_path))
+        self.assertFalse(reference_path.exists())
 
 
 if __name__ == "__main__":

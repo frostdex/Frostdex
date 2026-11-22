@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import math
 import os
 import random
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +16,43 @@ import storage
 ROOT = Path(os.environ.get("FROSTWAVE_DATA_DIR", Path.home() / ".frostwave"))
 MUSIC_ROOT = ROOT / "music"
 CHECKPOINT_ROOT = ROOT / "models" / "ace-step"
+AUDIO_REFERENCE_FORMATS = ("wav", "mp3", "flac", "ogg")
 PIPELINE_LOCK = threading.Lock()
 PIPELINE: Any = None
+
+
+def audio_reference_directory(address: str) -> Path:
+    owner_key = hashlib.sha256(address.lower().encode("utf-8")).hexdigest()
+    return MUSIC_ROOT / "references" / owner_key
+
+
+def find_audio_reference(address: str, reference_audio_id: str) -> Path | None:
+    try:
+        upload_id = str(uuid.UUID(reference_audio_id))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    directory = audio_reference_directory(address)
+    for extension in AUDIO_REFERENCE_FORMATS:
+        path = directory / f"{upload_id}.{extension}"
+        if path.is_file():
+            return path
+    return None
+
+
+def audio_reference_duration(path: Path) -> int:
+    from mutagen import File as MutagenFile
+    from mutagen import MutagenError
+
+    try:
+        audio_file = MutagenFile(str(path))
+    except (MutagenError, OSError) as error:
+        raise ValueError("This audio file couldn't be read.") from error
+    if audio_file is None or audio_file.info is None:
+        raise ValueError("This audio file couldn't be read.")
+    duration = float(audio_file.info.length)
+    if not math.isfinite(duration) or not 1 <= duration <= 240:
+        raise ValueError("Reference audio must be between 1 second and 4 minutes.")
+    return round(duration)
 
 
 def validate_request(payload: Any) -> dict[str, Any]:
@@ -33,8 +71,19 @@ def validate_request(payload: Any) -> dict[str, Any]:
     if not isinstance(genre, str) or not genre.strip() or len(genre) > 40:
         raise ValueError("Choose a supported music style.")
     duration = payload.get("duration")
-    if isinstance(duration, bool) or not isinstance(duration, int) or duration not in {60, 120, 240}:
-        raise ValueError("Choose a song length of 1, 2, or 4 minutes.")
+    reference_audio_id = payload.get("reference_audio_id")
+    if reference_audio_id is None:
+        if isinstance(duration, bool) or not isinstance(duration, int) or duration not in {60, 120, 240}:
+            raise ValueError("Choose a song length of 1, 2, or 4 minutes.")
+    else:
+        if not isinstance(reference_audio_id, str):
+            raise ValueError("The uploaded reference audio is invalid.")
+        try:
+            reference_audio_id = str(uuid.UUID(reference_audio_id))
+        except ValueError as error:
+            raise ValueError("The uploaded reference audio is invalid.") from error
+        if isinstance(duration, bool) or not isinstance(duration, int) or not 1 <= duration <= 240:
+            raise ValueError("Reference audio must be 1–240 seconds long.")
     vocal_style = payload.get("vocal_style")
     if vocal_style not in {"With vocals", "Instrumental"}:
         raise ValueError("Choose a vocal style.")
@@ -51,6 +100,7 @@ def validate_request(payload: Any) -> dict[str, Any]:
         "lyrics": lyrics.strip(),
         "genre": genre.strip(),
         "duration": duration,
+        "reference_audio_id": reference_audio_id,
         "vocal_style": vocal_style,
         "is_public": is_public,
     }
@@ -74,7 +124,7 @@ def get_pipeline() -> Any:
         return PIPELINE
 
 
-def render_music(job_id: str, request: dict[str, Any]) -> None:
+def render_music(job_id: str, request: dict[str, Any], reference_audio_path: Path | None = None) -> None:
     output_path = MUSIC_ROOT / f"{job_id}.wav"
     try:
         storage.update_music_job(job_id, status="loading", message="Loading ACE-Step. Model weights download the first time.")
@@ -105,6 +155,9 @@ def render_music(job_id: str, request: dict[str, Any]) -> None:
             oss_steps="",
             guidance_scale_text=0.0,
             guidance_scale_lyric=0.0,
+            audio2audio_enable=reference_audio_path is not None,
+            ref_audio_strength=0.5,
+            ref_audio_input=str(reference_audio_path) if reference_audio_path else None,
             save_path=str(output_path),
         )
         if not output_path.is_file() or output_path.stat().st_size == 0:
@@ -114,3 +167,9 @@ def render_music(job_id: str, request: dict[str, Any]) -> None:
         logging.exception("Music generation failed for job %s", job_id)
         output_path.unlink(missing_ok=True)
         storage.update_music_job(job_id, status="failed", message=str(error)[:1000] or "Music generation failed.")
+    finally:
+        if reference_audio_path is not None:
+            try:
+                reference_audio_path.unlink(missing_ok=True)
+            except OSError:
+                logging.exception("Couldn't remove reference audio for job %s.", job_id)

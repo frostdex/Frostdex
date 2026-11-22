@@ -13,14 +13,23 @@ const controlsPanel = document.querySelector("#custom-controls");
 const createButton = document.querySelector("#create-button");
 const messageArea = document.querySelector("#creation-message");
 const toastRegion = document.querySelector("#toast-region");
+const audioReferenceInput = document.querySelector("#audio-reference-input");
+const audioReferencePreview = document.querySelector("#audio-reference-preview");
+const audioReferenceStatus = document.querySelector("#audio-reference-status");
 let chosenVocal = "With vocals";
 let libraryFilter = "all";
 let walletAddress = null;
+let walletProvider = null;
+let walletProviderPromise = null;
+let walletConnectScriptPromise = null;
 let activeVideoJob = null;
 let activeMusicJob = null;
 let sessionToken = sessionStorage.getItem(AUTH_STORAGE_KEY);
 let tracks = [];
 let discoveries = [];
+let selectedReferenceAudio = null;
+let selectedReferenceAudioDuration = null;
+let referenceAudioObjectUrl = null;
 
 function showToast(message, isError = false) {
   const toast = document.createElement("div");
@@ -55,21 +64,79 @@ function apiUrl(path) {
 }
 
 function apiFetch(path, options = {}) {
+  if (!API_BASE_URL && !["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+    return Promise.reject(new Error(
+      "FROSTWAVE_API_URL isn't configured. Set it in Vercel to the public HTTPS origin of your GPU backend, then redeploy.",
+    ));
+  }
   const headers = new Headers(options.headers || {});
   if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
   return fetch(apiUrl(path), { ...options, headers });
 }
 
-async function connectWallet() {
-  const provider = window.ethereum;
-  if (!provider || typeof provider.request !== "function") {
-    showToast("No browser wallet found. Install an EVM wallet extension, then try again.", true);
-    return;
+async function getWalletConnectProvider() {
+  if (walletProvider) return walletProvider;
+  if (walletProviderPromise) return walletProviderPromise;
+
+  const projectId = window.FROSTWAVE_CONFIG?.walletConnectProjectId;
+  if (!projectId) {
+    throw new Error("WalletConnect isn't configured. Set FROSTWAVE_WALLETCONNECT_PROJECT_ID in Vercel, then redeploy.");
   }
+
+  walletProviderPromise = (async () => {
+    if (!window.FrostwaveWalletConnect) {
+      if (!walletConnectScriptPromise) {
+        walletConnectScriptPromise = new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "walletconnect-provider.js";
+          script.onload = resolve;
+          script.onerror = () => reject(new Error("Couldn't load the WalletConnect provider."));
+          document.head.append(script);
+        }).catch((error) => {
+          walletConnectScriptPromise = null;
+          throw error;
+        });
+      }
+      await walletConnectScriptPromise;
+    }
+
+    const chains = window.FROSTWAVE_CONFIG.walletConnectChains;
+    const EthereumProvider = window.FrostwaveWalletConnect?.EthereumProvider;
+    if (!EthereumProvider || !Array.isArray(chains) || chains.length === 0) {
+      throw new Error("WalletConnect configuration is invalid. Check the Vercel chain ID settings and redeploy.");
+    }
+    walletProvider = await EthereumProvider.init({
+      projectId,
+      chains: [chains[0]],
+      optionalChains: chains.slice(1),
+      showQrModal: true,
+    });
+    walletProvider.on("accountsChanged", (accounts) => {
+      if (walletAddress && (!Array.isArray(accounts) || accounts[0]?.toLowerCase() !== walletAddress.toLowerCase())) {
+        signOut();
+        showToast("Wallet account changed. Sign in again to continue.");
+      }
+    });
+    walletProvider.on("disconnect", () => {
+      if (walletAddress) {
+        signOut();
+        showToast("Wallet disconnected. Sign in again to continue.");
+      }
+    });
+    return walletProvider;
+  })().finally(() => {
+    walletProviderPromise = null;
+  });
+  return walletProviderPromise;
+}
+
+async function connectWallet() {
   try {
-    const accounts = await provider.request({ method: "eth_requestAccounts" });
+    const provider = await getWalletConnectProvider();
+    await provider.connect();
+    const accounts = await provider.request({ method: "eth_accounts" });
     if (!Array.isArray(accounts) || typeof accounts[0] !== "string") {
-      throw new Error("The wallet didn't return an account.");
+      throw new Error("WalletConnect didn't return an account.");
     }
     const chainIdHex = await provider.request({ method: "eth_chainId" });
     const chainId = Number.parseInt(chainIdHex, 16);
@@ -152,6 +219,81 @@ async function signOut() {
 function updatePromptCount() {
   promptCount.textContent = String(promptInput.value.length);
 }
+
+function clearAudioReference() {
+  if (referenceAudioObjectUrl) URL.revokeObjectURL(referenceAudioObjectUrl);
+  referenceAudioObjectUrl = null;
+  selectedReferenceAudio = null;
+  selectedReferenceAudioDuration = null;
+  audioReferenceInput.value = "";
+  audioReferencePreview.removeAttribute("src");
+  audioReferencePreview.load();
+  document.querySelector("#audio-reference-selected").hidden = true;
+  document.querySelector("#audio-reference-name").textContent = "";
+  document.querySelector("#music-duration").disabled = false;
+  audioReferenceStatus.textContent = "";
+}
+
+function chooseAudioReference(file) {
+  const extension = file.name.split(".").pop().toLowerCase();
+  if (!["wav", "mp3", "flac", "ogg"].includes(extension)) {
+    clearAudioReference();
+    audioReferenceStatus.textContent = "Choose a WAV, MP3, FLAC, or OGG audio file.";
+    return;
+  }
+  if (file.size === 0 || file.size > 32 * 1024 * 1024) {
+    clearAudioReference();
+    audioReferenceStatus.textContent = "Audio files must be between 1 byte and 32 MB.";
+    return;
+  }
+
+  if (referenceAudioObjectUrl) URL.revokeObjectURL(referenceAudioObjectUrl);
+  selectedReferenceAudio = file;
+  selectedReferenceAudioDuration = null;
+  referenceAudioObjectUrl = URL.createObjectURL(file);
+  audioReferencePreview.src = referenceAudioObjectUrl;
+  document.querySelector("#audio-reference-name").textContent = `${file.name} · ${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+  document.querySelector("#audio-reference-selected").hidden = false;
+  document.querySelector("#music-duration").disabled = true;
+  audioReferenceStatus.textContent = "Checking the audio clip…";
+}
+
+audioReferencePreview.addEventListener("loadedmetadata", () => {
+  const duration = audioReferencePreview.duration;
+  if (!Number.isFinite(duration) || duration < 1 || duration > 240) {
+    clearAudioReference();
+    audioReferenceStatus.textContent = "Reference audio must be between 1 second and 4 minutes.";
+    return;
+  }
+  selectedReferenceAudioDuration = Math.round(duration);
+  audioReferenceStatus.textContent = `Ready · the new track will follow this clip’s ${selectedReferenceAudioDuration}-second length.`;
+});
+
+audioReferencePreview.addEventListener("error", () => {
+  if (selectedReferenceAudio) {
+    clearAudioReference();
+    audioReferenceStatus.textContent = "This audio file couldn’t be previewed. Try WAV, MP3, FLAC, or OGG.";
+  }
+});
+
+document.querySelector("#audio-reference-browse").addEventListener("click", () => audioReferenceInput.click());
+audioReferenceInput.addEventListener("change", () => {
+  const [file] = audioReferenceInput.files;
+  if (file) chooseAudioReference(file);
+});
+document.querySelector("#audio-reference-remove").addEventListener("click", clearAudioReference);
+const audioDropzone = document.querySelector("#audio-reference-browse");
+audioDropzone.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  audioDropzone.classList.add("is-dragging");
+});
+audioDropzone.addEventListener("dragleave", () => audioDropzone.classList.remove("is-dragging"));
+audioDropzone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  audioDropzone.classList.remove("is-dragging");
+  const [file] = event.dataTransfer.files;
+  if (file) chooseAudioReference(file);
+});
 
 function renderTrack(track) {
   const favoriteLabel = track.favorite ? "Remove from favorites" : "Add to favorites";
@@ -266,16 +408,33 @@ createButton.addEventListener("click", async () => {
     document.querySelector("#lyrics-input").focus();
     return;
   }
+  if (selectedReferenceAudio && selectedReferenceAudioDuration === null) {
+    messageArea.textContent = "Wait for the audio clip to finish loading, then try again.";
+    return;
+  }
   if (!sessionToken) {
     showToast("Sign in with your wallet to generate and save music.", true);
     connectWallet();
     return;
   }
   const title = customTitle || prompt.split(/[.!?]/)[0].split(/\s+/).slice(0, 5).join(" ") || "A new idea";
+  let uploadedReferenceId = null;
   createButton.disabled = true;
-  createButton.querySelector("span:first-child").textContent = "Sending to your GPU…";
+  createButton.querySelector("span:first-child").textContent = selectedReferenceAudio ? "Uploading audio…" : "Sending to your GPU…";
   messageArea.textContent = "";
   try {
+    let generationDuration = selectedReferenceAudioDuration;
+    if (selectedReferenceAudio) {
+      const uploadResponse = await apiFetch("/api/music/uploads", {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: selectedReferenceAudio,
+      });
+      const upload = await readApiResponse(uploadResponse);
+      uploadedReferenceId = upload.id;
+      generationDuration = upload.duration_seconds;
+      createButton.querySelector("span:first-child").textContent = "Sending to your GPU…";
+    }
     const response = await apiFetch("/api/music/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -285,11 +444,13 @@ createButton.addEventListener("click", async () => {
         lyrics,
         genre: genre === "Surprise me" ? mood : genre,
         vocal_style: chosenVocal,
-        duration: Number(document.querySelector("#music-duration").value),
+        duration: generationDuration ?? Number(document.querySelector("#music-duration").value),
+        reference_audio_id: uploadedReferenceId,
         is_public: document.querySelector("#share-song").checked,
       }),
     });
     const job = await readApiResponse(response);
+    uploadedReferenceId = null;
     activeMusicJob = job.id;
     await loadMusicJobs();
     pollMusicJob(job.id);
@@ -297,6 +458,13 @@ createButton.addEventListener("click", async () => {
   } catch (error) {
     messageArea.textContent = error.message;
     showToast(`Couldn't start music generation: ${error.message}`, true);
+    if (uploadedReferenceId) {
+      try {
+        await apiFetch(`/api/music/uploads/${encodeURIComponent(uploadedReferenceId)}`, { method: "DELETE" });
+      } catch (cleanupError) {
+        showToast(`Couldn't remove the unused audio upload: ${cleanupError.message}`, true);
+      }
+    }
   } finally {
     createButton.disabled = false;
     createButton.querySelector("span:first-child").textContent = "Make my song";
@@ -336,7 +504,12 @@ const videoOutput = document.querySelector("#video-output");
 async function readApiResponse(response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(typeof data.error === "string" ? data.error : `Frostwave API returned ${response.status}.`);
+    const message = typeof data.error === "string" ? data.error : `Frostwave API returned ${response.status}.`;
+    if (response.status === 404 && (message === "Not found." || message.startsWith("Frostwave API returned"))) {
+      const path = new URL(response.url).pathname;
+      throw new Error(`${message} The backend doesn't recognize ${path}; check that FROSTWAVE_API_URL points to your GPU backend origin and that it's running the current Frostwave server.`);
+    }
+    throw new Error(message);
   }
   return data;
 }
@@ -573,15 +746,6 @@ document.addEventListener("click", (event) => {
     promptInput.focus();
   }
 });
-
-if (window.ethereum && typeof window.ethereum.on === "function") {
-  window.ethereum.on("accountsChanged", (accounts) => {
-    if (walletAddress && (!Array.isArray(accounts) || accounts[0]?.toLowerCase() !== walletAddress.toLowerCase())) {
-      signOut();
-      showToast("Wallet account changed. Sign in again to continue.");
-    }
-  });
-}
 
 renderLibrary();
 renderDiscover();

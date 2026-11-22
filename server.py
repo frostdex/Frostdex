@@ -93,6 +93,7 @@ MODEL_IDS = {
     },
 }
 VIDEO_SECONDS = 300
+MAX_AUDIO_UPLOAD_BYTES = 32 * 1024 * 1024
 STYLE_PROMPTS = {
     "Cinematic": "Cinematic lighting, deliberate camera movement, film-like color grading",
     "Hand-drawn animation": "Hand-drawn animated film, expressive linework, cohesive illustrated frames",
@@ -106,6 +107,22 @@ PIPELINE_LOCK = threading.Lock()
 PIPELINE: Any = None
 PIPELINE_MODEL: str | None = None
 WORKERS = ThreadPoolExecutor(max_workers=1, thread_name_prefix="video-render")
+
+
+def audio_upload_extension(data: bytes) -> str:
+    if not data:
+        raise ValueError("Choose an audio file to upload.")
+    if len(data) > MAX_AUDIO_UPLOAD_BYTES:
+        raise ValueError("Audio files must be 32 MB or smaller.")
+    if len(data) >= 12 and data[:4] in {b"RIFF", b"RF64"} and data[8:12] == b"WAVE":
+        return "wav"
+    if data.startswith(b"fLaC"):
+        return "flac"
+    if data.startswith(b"OggS"):
+        return "ogg"
+    if data.startswith(b"ID3") or len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0:
+        return "mp3"
+    raise ValueError("Use a WAV, MP3, FLAC, or OGG audio file.")
 
 
 def dimensions_for(model_key: str, aspect_ratio: str) -> tuple[int, int]:
@@ -371,7 +388,7 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
             self.send_json(403, {"error": "This website origin isn't allowed by the GPU backend."})
             return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.send_header("Access-Control-Max-Age", "600")
         self.end_headers()
@@ -546,13 +563,32 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
             media_file.seek(start)
             shutil.copyfileobj(media_file, self.wfile)
 
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        match = re.fullmatch(r"/api/music/uploads/([0-9a-f-]{36})", path)
+        if match is None:
+            self.send_json(404, {"error": "Not found."})
+            return
+        address = self.request_address()
+        if address is None:
+            return
+        reference_path = music_engine.find_audio_reference(address, match.group(1))
+        if reference_path is not None:
+            try:
+                reference_path.unlink(missing_ok=True)
+            except OSError:
+                logging.exception("Couldn't remove uploaded reference audio.")
+                self.send_json(500, {"error": "Couldn't remove the uploaded audio from the GPU backend."})
+                return
+        self.send_json(200, {"deleted": reference_path is not None})
+
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         ticket_match = re.fullmatch(r"/api/video/jobs/([0-9a-f-]{36})/ticket", path)
         music_ticket_match = re.fullmatch(r"/api/music/jobs/([0-9a-f-]{36})/ticket", path)
         favorite_match = re.fullmatch(r"/api/music/jobs/([0-9a-f-]{36})/favorite", path)
         if (
-            path not in {"/api/auth/nonce", "/api/auth/verify", "/api/auth/logout", "/api/video/jobs", "/api/music/jobs"}
+            path not in {"/api/auth/nonce", "/api/auth/verify", "/api/auth/logout", "/api/video/jobs", "/api/music/jobs", "/api/music/uploads"}
             and not ticket_match
             and not music_ticket_match
             and not favorite_match
@@ -562,6 +598,67 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
         if path == "/api/auth/logout":
             auth.revoke(self.headers.get("Authorization"))
             self.send_json(200, {"signed_out": True})
+            return
+        if path == "/api/music/uploads":
+            address = self.request_address()
+            if address is None:
+                return
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_json(400, {"error": "Invalid Content-Length."})
+                return
+            if content_length <= 0:
+                self.send_json(400, {"error": "Choose an audio file to upload."})
+                return
+            if content_length > MAX_AUDIO_UPLOAD_BYTES:
+                self.send_json(413, {"error": "Audio files must be 32 MB or smaller."})
+                return
+            data = self.rfile.read(content_length)
+            if len(data) != content_length:
+                self.send_json(400, {"error": "The audio upload was incomplete. Try again."})
+                return
+            try:
+                extension = audio_upload_extension(data)
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
+                return
+            upload_id = str(uuid.uuid4())
+            upload_directory = music_engine.audio_reference_directory(address)
+            upload_path = upload_directory / f"{upload_id}.{extension}"
+            temporary_path = upload_directory / f".{upload_id}.tmp"
+            try:
+                upload_directory.mkdir(parents=True, exist_ok=True)
+                temporary_path.write_bytes(data)
+            except OSError:
+                temporary_path.unlink(missing_ok=True)
+                logging.exception("Couldn't save uploaded reference audio.")
+                self.send_json(500, {"error": "Couldn't save the uploaded audio on the GPU backend."})
+                return
+            try:
+                duration = music_engine.audio_reference_duration(temporary_path)
+            except ImportError:
+                temporary_path.unlink(missing_ok=True)
+                logging.exception("Reference audio metadata support isn't installed.")
+                self.send_json(503, {"error": "Update the GPU backend dependencies to enable audio uploads."})
+                return
+            except ValueError as error:
+                temporary_path.unlink(missing_ok=True)
+                self.send_json(400, {"error": str(error)})
+                return
+            try:
+                temporary_path.replace(upload_path)
+            except OSError:
+                temporary_path.unlink(missing_ok=True)
+                logging.exception("Couldn't finalize uploaded reference audio.")
+                self.send_json(500, {"error": "Couldn't save the uploaded audio on the GPU backend."})
+                return
+            self.send_json(201, {
+                "id": upload_id,
+                "format": extension,
+                "size": len(data),
+                "duration_seconds": duration,
+            })
             return
         if favorite_match:
             address = self.request_address()
@@ -663,6 +760,15 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
             except ValueError as error:
                 self.send_json(400, {"error": str(error)})
                 return
+            reference_audio_path = None
+            if request["reference_audio_id"] is not None:
+                reference_audio_path = music_engine.find_audio_reference(
+                    address,
+                    request["reference_audio_id"],
+                )
+                if reference_audio_path is None:
+                    self.send_json(404, {"error": "Uploaded reference audio not found. Upload it again and retry."})
+                    return
             runtime = runtime_status()
             if not runtime["ready"]:
                 self.send_json(503, {"error": runtime["message"]})
@@ -679,7 +785,7 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
             }
             try:
                 storage.create_music_job(job)
-                WORKERS.submit(music_engine.render_music, job_id, request)
+                WORKERS.submit(music_engine.render_music, job_id, request, reference_audio_path)
             except (RuntimeError, OSError, sqlite3.Error) as error:
                 logging.exception("Couldn't queue music job %s", job_id)
                 storage.update_music_job(job_id, status="failed", message="Couldn't queue this song on the local engine.")
