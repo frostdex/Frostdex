@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f5f0" />
+    <meta
+      name="description"
+      content="A free music-making playground for ideas, moods, and melodies."
+    />
+    <title>Frostwave — make a little noise</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="wordmark" href="#" aria-label="Frostwave home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>frostwave</span>
+        </a>
+
+        <button class="new-song-button" data-view="create">
+          <span aria-hidden="true">＋</span> Make a song
+        </button>
+
+        <nav class="main-nav" aria-label="Main navigation">
+          <button class="nav-link active" data-view="create"><span class="nav-icon">✳</span> Create</button>
+          <button class="nav-link" data-view="video"><span class="nav-icon">▷</span> AI video</button>
+          <button class="nav-link" data-view="discover"><span class="nav-icon">◉</span> Discover</button>
+          <button class="nav-link" data-view="library"><span class="nav-icon">♫</span> Your library</button>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="free-note">
+            <span class="free-note-icon">✳</span>
+            <div><strong>Made for making</strong><span>Every creative tool is free.</span></div>
+          </div>
+          <button class="profile-button" id="profile-button">
+            <span class="avatar" id="avatar">♫</span>
+            <span class="profile-copy"><strong id="profile-name">Your space</strong><span id="profile-subtitle">Connect a wallet</span></span>
+            <span class="profile-chevron">⌄</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <header class="topbar">
+          <div class="mobile-brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span> frostwave</div>
+          <div class="breadcrumb"><span id="breadcrumb-label">Create</span><span class="breadcrumb-dot">/</span><span class="muted">Your next favorite</span></div>
+          <div class="topbar-actions">
+            <button class="text-button" id="top-wallet-button">Connect wallet</button>
+            <button class="avatar top-avatar" id="top-avatar" aria-label="Account menu">♫</button>
+          </div>
+        </header>
+
+        <section class="view-panel active" id="create-view">
+          <div class="create-intro">
+            <div class="eyebrow"><span class="eyebrow-line"></span> A studio for every idea</div>
+            <h1>Make a little<br /><span>noise.</span></h1>
+            <p>Start with a feeling, a half-remembered melody, or a few words. See where it takes you.</p>
+          </div>
+
+          <div class="composer-card">
+            <div class="composer-topline">
+              <div><span class="step-number">01</span><span class="composer-label">Describe your sound</span></div>
+              <button class="mode-toggle" id="custom-mode-button" aria-expanded="false">
+                <span class="sliders-icon">☷</span> More controls <span class="toggle-caret">⌄</span>
+              </button>
+            </div>
+            <label class="sr-only" for="song-prompt">Describe the song you want to make</label>
+            <textarea id="song-prompt" maxlength="500" placeholder="A dreamy indie-folk song about driving home under a sky full of stars..."></textarea>
+            <div class="prompt-footer">
+              <span class="character-count"><span id="prompt-count">0</span> / 500</span>
+              <button class="shuffle-button" id="idea-button"><span aria-hidden="true">⤨</span> Surprise me</button>
+            </div>
+
+            <div class="custom-controls" id="custom-controls" hidden>
+              <div class="control-row">
+                <div class="control-field">
+                  <label for="song-title">Song title <span class="optional">optional</span></label>
+                  <input id="song-title" type="text" maxlength="60" placeholder="Give it a name" />
+                </div>
+                <div class="control-field">
+                  <label>Vocal style</label>
+                  <div class="segmented-control" role="group" aria-label="Vocal style">
+                    <button class="segment selected" data-vocal="With vocals">With vocals</button>
+                    <button class="segment" data-vocal="Instrumental">Instrumental</button>
+                  </div>
+                </div>
+              </div>
+              <div class="control-field lyrics-field">
+                <label for="lyrics-input">Lyrics <span class="optional">optional</span></label>
+                <textarea id="lyrics-input" maxlength="1500" placeholder="Write your own lyrics, or leave this blank to start with just an idea..."></textarea>
+              </div>
+              <div class="control-row">
+                <div class="control-field">
+                  <label for="genre-select">Starting point</label>
+                  <select id="genre-select">
+                    <option>Surprise me</option><option>Indie</option><option>Electronic</option><option>Hip-hop</option><option>Jazz</option><option>Ambient</option><option>Rock</option><option>Folk</option><option>R&amp;B</option>
+                  </select>
+                </div>
+                <div class="control-field">
+                  <label for="mood-select">Mood</label>
+                  <select id="mood-select">
+                    <option>Follow the feeling</option><option>Dreamy</option><option>Hopeful</option><option>Restless</option><option>Playful</option><option>Melancholy</option><option>Powerful</option>
+                  </select>
+                </div>
+              </div>
+              <div class="control-row advanced-row">
+                <div class="range-control"><label for="warmth-range">Unexpectedness <span id="warmth-value">50</span></label><input id="warmth-range" type="range" min="0" max="100" value="50" /></div>
+                <div class="range-control"><label for="style-range">Style influence <span id="style-value">70</span></label><input id="style-range" type="range" min="0" max="100" value="70" /></div>
+              </div>
+            </div>
+
+            <div class="composer-bottom">
+              <div class="free-label"><span class="free-dot"></span> Free to create <span class="no-limits">· No credits or paywalls</span></div>
+              <button class="create-button" id="create-button"><span>Make my song</span><span class="button-arrow">↗</span></button>
+            </div>
+          </div>
+
+          <div class="creation-message" id="creation-message" role="status" aria-live="polite"></div>
+          <div class="library-preview" id="recently-made">
+            <div class="section-heading">
+              <div><div class="eyebrow small-eyebrow">YOUR LITTLE CORNER</div><h2>Recently made</h2></div>
+              <button class="subtle-link" data-view="library">See your library <span>↗</span></button>
+            </div>
+            <div class="track-list" id="recent-track-list"></div>
+          </div>
+        </section>
+
+        <section class="view-panel" id="discover-view">
+          <div class="page-heading">
+            <div class="eyebrow"><span class="eyebrow-line"></span> A world of sound</div>
+            <h1>Find your next<br /><span>starting point.</span></h1>
+            <p>Little sparks from the Frostwave community. Find something that feels like you.</p>
+          </div>
+          <div class="discover-toolbar">
+            <div class="filter-tabs" role="group" aria-label="Filter tracks">
+              <button class="filter-tab active" data-filter="All">For you</button>
+              <button class="filter-tab" data-filter="Chill">Chill</button>
+              <button class="filter-tab" data-filter="Electronic">Electronic</button>
+              <button class="filter-tab" data-filter="Indie">Indie</button>
+              <button class="filter-tab" data-filter="Hip-hop">Hip-hop</button>
+            </div>
+            <label class="search-box"><span aria-hidden="true">⌕</span><input id="discover-search" type="search" placeholder="Find a sound" aria-label="Search tracks" /></label>
+          </div>
+          <div class="discover-grid" id="discover-grid"></div>
+        </section>
+
+        <section class="view-panel" id="video-view">
+          <div class="page-heading video-heading">
+            <div class="eyebrow"><span class="eyebrow-line"></span> From a thought to a moving picture</div>
+            <h1>Make a film<br /><span>from a feeling.</span></h1>
+            <p>Describe a world, a moment, or a story. Shape a five-minute video from your imagination, rendered on your own GPU.</p>
+          </div>
+          <div class="video-card">
+            <div class="video-card-top">
+              <div><span class="step-number">01</span><span class="composer-label">Describe your video</span></div>
+              <span class="free-video-badge"><span class="free-dot"></span> Free · No usage limits</span>
+            </div>
+            <label class="sr-only" for="video-prompt">Describe the video you want to make</label>
+            <textarea id="video-prompt" maxlength="1000" placeholder="A tiny lighthouse keeper walks through a field of glowing flowers as the northern lights ripple overhead..."></textarea>
+            <div class="video-prompt-footer"><span class="character-count"><span id="video-prompt-count">0</span> / 1000</span><span class="video-prompt-hint">The more detail, the better the picture.</span></div>
+            <div class="video-settings">
+              <div class="control-field"><label for="video-model">AI generator</label><select id="video-model"><option value="wan21-fast">Wan 2.1 · 1.3B — faster, 8.2 GB+ VRAM</option><option value="wan21-quality">Wan 2.1 · 14B — higher detail, 13 GB+ VRAM</option><option value="wan22-latest">Wan 2.2 · A14B — latest, high VRAM</option><option value="cogvideo-2b">CogVideoX · 2B — low-VRAM offload, slower</option><option value="cogvideo-5b">CogVideoX · 5B — higher detail, 19 GB+ VRAM</option></select></div>
+              <div class="control-field"><div class="field-label">Video length</div><div class="setting-value" id="video-duration">5 minutes <span>✓</span></div></div>
+              <div class="control-field"><label for="video-format">Format</label><select id="video-format"><option value="landscape">Landscape · 16:9</option><option value="portrait">Portrait · 9:16</option><option value="square">Square · 1:1</option></select></div>
+              <div class="control-field"><label for="video-look">Visual style</label><select id="video-look"><option>Cinematic</option><option>Hand-drawn animation</option><option>Dreamlike</option><option>Documentary</option><option>Stop motion</option><option>Photoreal</option></select></div>
+            </div>
+            <div class="video-free-note"><span>✳</span><div><strong>No service fees or app quotas.</strong><p>Choose from five open models. Rendering runs locally on your GPU and uses your electricity and disk space.</p></div></div>
+            <div class="video-action-row"><span id="video-status" role="status" aria-live="polite">Checking local video engine…</span><button class="create-button" id="create-video-button"><span>Create 5-minute video</span><span class="button-arrow">↗</span></button></div>
+            <div class="video-progress" id="video-progress" hidden>
+              <div class="progress-label"><strong id="video-progress-title">Preparing your video</strong><span id="video-progress-count">0 / 60 clips</span></div>
+              <progress id="video-progress-bar" max="60" value="0">0%</progress>
+              <p id="video-progress-message">Waiting for the local GPU…</p>
+            </div>
+            <div class="video-output" id="video-output" hidden>
+              <video id="generated-video" controls playsinline></video>
+              <a class="download-video" id="download-video" href="#" download>Download MP4 <span>↗</span></a>
+            </div>
+          </div>
+          <div class="video-backend-note"><span class="note-icon">i</span><p>Five-minute videos are assembled from short generated shots and trimmed to exactly five minutes. Rendering is sequential and can take hours; the selected model's weights download the first time you use it. The local queue has no app-imposed generation cap.</p></div>
+        </section>
+
+        <section class="view-panel" id="library-view">
+          <div class="page-heading library-heading">
+            <div class="eyebrow"><span class="eyebrow-line"></span> YOUR LITTLE CORNER</div>
+            <h1>Your music,<br /><span>your way.</span></h1>
+            <p>Every idea you make, all in one place. This library is saved on this device.</p>
+          </div>
+          <div class="library-toolbar">
+            <div class="filter-tabs" role="group" aria-label="Filter your library">
+              <button class="library-tab active" data-library-filter="all">All tracks</button>
+              <button class="library-tab" data-library-filter="favorites">Favorites <span>♡</span></button>
+            </div>
+            <span class="track-total" id="library-total"></span>
+          </div>
+          <div class="track-list library-track-list" id="library-track-list"></div>
+          <div class="empty-state" id="empty-library" hidden>
+            <span class="empty-icon">♫</span><h2>Your first song is waiting.</h2><p>Every great track starts somewhere. Go make a little noise.</p><button class="create-button" data-view="create">Make a song <span class="button-arrow">↗</span></button>
+          </div>
+        </section>
+
+        <footer class="app-footer"><span>Made for the joy of making.</span><span>Frostwave is an independent music-making playground.</span></footer>
+      </main>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
