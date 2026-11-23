@@ -22,6 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import auth
+import fal_api
 import music_engine
 import storage
 
@@ -146,7 +147,7 @@ def validate_request(payload: Any) -> dict[str, str]:
         raise ValueError("Video descriptions must be 1,000 characters or fewer.")
     model = payload.get("model")
     if not isinstance(model, str) or model not in MODEL_IDS:
-        raise ValueError("Choose one of the available local AI generators.")
+        raise ValueError("Choose one of the available video generators.")
     aspect_ratio = payload.get("format")
     if not isinstance(aspect_ratio, str) or aspect_ratio not in ASPECT_RATIOS:
         raise ValueError("Choose landscape, portrait, or square format.")
@@ -162,31 +163,41 @@ def validate_request(payload: Any) -> dict[str, str]:
 
 
 def runtime_status() -> dict[str, Any]:
+    if fal_api.is_configured():
+        return {
+            "ready": True,
+            "provider": "fal.ai",
+            "gpu": None,
+            "message": "Fal.ai is ready. Generation uses your Fal.ai account balance or billing.",
+        }
     try:
         import torch
     except ImportError:
         return {
             "ready": False,
+            "provider": "local",
             "gpu": None,
             "message": "PyTorch is missing. Install a CUDA-enabled PyTorch build, then restart the local engine.",
         }
     except Exception as error:
-        return {"ready": False, "gpu": None, "message": f"PyTorch couldn't start: {error}"}
+        return {"ready": False, "provider": "local", "gpu": None, "message": f"PyTorch couldn't start: {error}"}
 
     try:
         if not torch.cuda.is_available():
             return {
                 "ready": False,
+                "provider": "local",
                 "gpu": None,
                 "message": "No CUDA GPU found. This local generator needs a supported NVIDIA GPU.",
             }
         return {
             "ready": True,
+            "provider": "local",
             "gpu": torch.cuda.get_device_name(0),
             "message": "Local GPU ready. Model weights download the first time you use each generator.",
         }
     except Exception as error:
-        return {"ready": False, "gpu": None, "message": f"CUDA couldn't initialize: {error}"}
+        return {"ready": False, "provider": "local", "gpu": None, "message": f"CUDA couldn't initialize: {error}"}
 
 
 def update_job(job_id: str, **updates: Any) -> None:
@@ -226,6 +237,9 @@ def get_pipeline(model_key: str) -> tuple[Any, Any]:
 
 
 def render_video(job_id: str, request: dict[str, str]) -> None:
+    if fal_api.is_configured():
+        render_fal_video(job_id, request)
+        return
     config = MODEL_IDS[request["model"]]
     width, height = dimensions_for(request["model"], request["format"])
     frames = int(config["frames"])
@@ -318,6 +332,53 @@ def render_video(job_id: str, request: dict[str, str]) -> None:
         update_job(job_id, status="failed", message=str(error)[:1200] or "Video generation failed.")
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def render_fal_video(job_id: str, request: dict[str, str]) -> None:
+    output_path = VIDEO_ROOT / f"{job_id}.mp4"
+    aspect_ratios = {"landscape": "16:9", "portrait": "9:16", "square": "1:1"}
+    prompt = f"{request['prompt']} Visual style: {STYLE_PROMPTS[request['style']]}"
+    try:
+        update_job(
+            job_id,
+            status="loading",
+            total_clips=1,
+            message="Submitting one short video clip to fal.ai. Usage may consume your account balance.",
+        )
+
+        def update_queue_status(state: str) -> None:
+            message = "Waiting in the fal.ai queue." if state == "IN_QUEUE" else "fal.ai is generating your video."
+            update_job(job_id, status="rendering", progress=25, message=message)
+
+        result = fal_api.submit_and_wait(
+            fal_api.VIDEO_MODEL,
+            {
+                "prompt": prompt,
+                "duration": 5,
+                "resolution": "480P",
+                "aspect_ratio": aspect_ratios[request["format"]],
+                "prompt_expansion_mode": "disabled",
+                "enable_safety_checker": True,
+            },
+            on_update=update_queue_status,
+        )
+        video = result.get("video")
+        if not isinstance(video, dict):
+            raise RuntimeError("fal.ai completed without returning a video.")
+        update_job(job_id, status="assembling", progress=90, message="Downloading your video from fal.ai.")
+        fal_api.download_file(video.get("url"), output_path, fal_api.MAX_VIDEO_BYTES)
+        update_job(
+            job_id,
+            status="complete",
+            progress=100,
+            completed_clips=1,
+            total_clips=1,
+            message="Your short video is ready.",
+        )
+    except Exception as error:
+        logging.exception("Fal.ai video generation failed for job %s", job_id)
+        output_path.unlink(missing_ok=True)
+        update_job(job_id, status="failed", message=str(error)[:1200] or "Fal.ai video generation failed.")
 
 
 class FrostwaveHandler(BaseHTTPRequestHandler):
@@ -769,6 +830,10 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
                 if reference_audio_path is None:
                     self.send_json(404, {"error": "Uploaded reference audio not found. Upload it again and retry."})
                     return
+                if fal_api.is_configured():
+                    reference_audio_path.unlink(missing_ok=True)
+                    self.send_json(400, {"error": "Fal.ai music generation doesn't support reference audio. Remove the audio clip and try again."})
+                    return
             runtime = runtime_status()
             if not runtime["ready"]:
                 self.send_json(503, {"error": runtime["message"]})
@@ -779,7 +844,7 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
                 "address": address,
                 "request": request,
                 "status": "queued",
-                "message": "Waiting for the local GPU.",
+                "message": "Waiting for fal.ai." if fal_api.is_configured() else "Waiting for the local GPU.",
                 "is_public": request["is_public"],
                 "created_at": int(time.time()),
             }
@@ -788,7 +853,7 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
                 WORKERS.submit(music_engine.render_music, job_id, request, reference_audio_path)
             except (RuntimeError, OSError, sqlite3.Error) as error:
                 logging.exception("Couldn't queue music job %s", job_id)
-                storage.update_music_job(job_id, status="failed", message="Couldn't queue this song on the local engine.")
+                storage.update_music_job(job_id, status="failed", message="Couldn't queue this song for generation.")
                 self.send_json(503, {"error": f"Couldn't queue the song: {error}"})
                 return
             self.send_json(202, storage.public_music_job(job))
@@ -805,18 +870,19 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
             return
 
         job_id = str(uuid.uuid4())
+        fal_enabled = fal_api.is_configured()
         config = MODEL_IDS[request["model"]]
-        total_clips = math.ceil(VIDEO_SECONDS / ((int(config["frames"]) - 1) / int(config["fps"])))
+        total_clips = 1 if fal_enabled else math.ceil(VIDEO_SECONDS / ((int(config["frames"]) - 1) / int(config["fps"])))
         job = {
             "id": job_id,
             "address": address,
-            "model": config["label"],
+            "model": "MiniMax H3 Max · fal.ai (5 seconds)" if fal_enabled else config["label"],
             "request": request,
             "status": "queued",
             "progress": 0,
             "completed_clips": 0,
             "total_clips": total_clips,
-            "message": "Waiting for the local GPU.",
+            "message": "Waiting for fal.ai." if fal_enabled else "Waiting for the local GPU.",
             "created_at": int(time.time()),
         }
         try:
@@ -824,7 +890,7 @@ class FrostwaveHandler(BaseHTTPRequestHandler):
             WORKERS.submit(render_video, job_id, request)
         except (RuntimeError, OSError, sqlite3.Error) as error:
             logging.exception("Couldn't queue video job %s", job_id)
-            storage.update_job(job_id, status="failed", message="Couldn't queue this video on the local engine.")
+            storage.update_job(job_id, status="failed", message="Couldn't queue this video for generation.")
             self.send_json(503, {"error": f"Couldn't queue the video: {error}"})
             return
         self.send_json(202, storage.public_job(job))

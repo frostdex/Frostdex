@@ -11,7 +11,7 @@ const walletConnectChains = (process.env.FROSTWAVE_WALLETCONNECT_CHAINS || "1,10
   .map((chain) => Number(chain.trim()));
 
 if (process.env.VERCEL && !apiBaseUrl) {
-  throw new Error("Set FROSTWAVE_API_URL in Vercel to the public HTTPS origin of your GPU backend.");
+  throw new Error("Set FROSTWAVE_API_URL in Vercel to the public HTTPS origin of your Python backend.");
 }
 if (process.env.VERCEL && !walletConnectProjectId) {
   throw new Error("Set FROSTWAVE_WALLETCONNECT_PROJECT_ID in Vercel to your public Reown project ID.");

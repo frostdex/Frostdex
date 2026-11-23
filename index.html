@@ -49,7 +49,7 @@
         <div class="sidebar-bottom">
           <div class="free-note">
             <span class="free-note-icon">✳</span>
-            <div><strong>Made for making</strong><span>Every creative tool is free.</span></div>
+            <div><strong>Made for making</strong><span>Generation costs depend on the active engine.</span></div>
           </div>
           <button class="profile-button" id="profile-button">
             <span class="avatar" id="avatar">♫</span>
@@ -159,7 +159,7 @@
             </div>
 
             <div class="composer-bottom">
-              <div class="free-label"><span class="free-dot"></span> Free to create <span class="no-limits">· No credits or paywalls</span></div>
+              <div class="free-label"><span class="free-dot"></span> <span id="music-generation-cost">Check generation mode</span> <span class="no-limits">· Usage details appear above</span></div>
               <button class="create-button" id="create-button"><span>Make my song</span><span class="button-arrow">↗</span></button>
             </div>
           </div>
@@ -203,7 +203,7 @@
           <div class="video-card">
             <div class="video-card-top">
               <div><span class="step-number">01</span><span class="composer-label">Describe your video</span></div>
-              <span class="free-video-badge"><span class="free-dot"></span> Free · No usage limits</span>
+              <span class="free-video-badge"><span class="free-dot"></span><span id="video-generation-cost">Check generation mode</span></span>
             </div>
             <label class="sr-only" for="video-prompt">Describe the video you want to make</label>
             <textarea id="video-prompt" maxlength="1000" placeholder="A tiny lighthouse keeper walks through a field of glowing flowers as the northern lights ripple overhead..."></textarea>
@@ -215,7 +215,7 @@
               <div class="control-field"><label for="video-look">Visual style</label><select id="video-look"><option>Cinematic</option><option>Hand-drawn animation</option><option>Dreamlike</option><option>Documentary</option><option>Stop motion</option><option>Photoreal</option></select></div>
             </div>
             <div class="video-free-note"><span>✳</span><div><strong>No service fees or app quotas.</strong><p>Choose from five open models. Rendering runs locally on your GPU and uses your electricity and disk space.</p></div></div>
-            <div class="video-action-row"><span id="video-status" role="status" aria-live="polite">Checking local video engine…</span><button class="create-button" id="create-video-button"><span>Create 5-minute video</span><span class="button-arrow">↗</span></button></div>
+            <div class="video-action-row"><span id="video-status" role="status" aria-live="polite">Checking video engine…</span><button class="create-button" id="create-video-button"><span>Create 5-minute video</span><span class="button-arrow">↗</span></button></div>
             <div class="video-progress" id="video-progress" hidden>
               <div class="progress-label"><strong id="video-progress-title">Preparing your video</strong><span id="video-progress-count">0 / 60 clips</span></div>
               <progress id="video-progress-bar" max="60" value="0">0%</progress>

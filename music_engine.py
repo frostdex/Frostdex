@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import fal_api
 import storage
 
 
@@ -127,41 +128,70 @@ def get_pipeline() -> Any:
 def render_music(job_id: str, request: dict[str, Any], reference_audio_path: Path | None = None) -> None:
     output_path = MUSIC_ROOT / f"{job_id}.wav"
     try:
-        storage.update_music_job(job_id, status="loading", message="Loading ACE-Step. Model weights download the first time.")
-        pipeline = get_pipeline()
         MUSIC_ROOT.mkdir(parents=True, exist_ok=True)
-        storage.update_music_job(job_id, status="rendering", message="Your local GPU is composing the song.")
         description = f"{request['genre']}, {request['prompt']}"
         if request["vocal_style"] == "Instrumental":
             description = f"Instrumental music, no vocals. {description}"
-        seed = random.randrange(0, 2**31)
-        pipeline(
-            format="wav",
-            audio_duration=request["duration"],
-            prompt=description,
-            lyrics=request["lyrics"],
-            infer_step=60,
-            guidance_scale=15.0,
-            scheduler_type="euler",
-            cfg_type="apg",
-            omega_scale=10.0,
-            manual_seeds=str(seed),
-            guidance_interval=0.5,
-            guidance_interval_decay=1.0,
-            min_guidance_scale=3.0,
-            use_erg_tag=True,
-            use_erg_lyric=True,
-            use_erg_diffusion=False,
-            oss_steps="",
-            guidance_scale_text=0.0,
-            guidance_scale_lyric=0.0,
-            audio2audio_enable=reference_audio_path is not None,
-            ref_audio_strength=0.5,
-            ref_audio_input=str(reference_audio_path) if reference_audio_path else None,
-            save_path=str(output_path),
-        )
+        if fal_api.is_configured():
+            if reference_audio_path is not None:
+                raise ValueError("Fal.ai music generation doesn't support reference audio.")
+            storage.update_music_job(
+                job_id,
+                status="loading",
+                message="Submitting your song request to fal.ai. Usage may consume your account balance.",
+            )
+
+            def update_queue_status(state: str) -> None:
+                message = "Waiting in the fal.ai queue." if state == "IN_QUEUE" else "fal.ai is composing your song."
+                storage.update_music_job(job_id, status="rendering", message=message)
+
+            result = fal_api.submit_and_wait(
+                fal_api.MUSIC_MODEL,
+                {
+                    "tags": description,
+                    "lyrics": request["lyrics"] or "[inst]",
+                    "duration": request["duration"],
+                    "enable_safety_checker": True,
+                },
+                on_update=update_queue_status,
+            )
+            audio = result.get("audio")
+            if not isinstance(audio, dict):
+                raise RuntimeError("fal.ai completed without returning an audio file.")
+            storage.update_music_job(job_id, status="rendering", message="Downloading your song from fal.ai.")
+            fal_api.download_file(audio.get("url"), output_path, fal_api.MAX_AUDIO_BYTES)
+        else:
+            storage.update_music_job(job_id, status="loading", message="Loading ACE-Step. Model weights download the first time.")
+            pipeline = get_pipeline()
+            storage.update_music_job(job_id, status="rendering", message="Your local GPU is composing the song.")
+            seed = random.randrange(0, 2**31)
+            pipeline(
+                format="wav",
+                audio_duration=request["duration"],
+                prompt=description,
+                lyrics=request["lyrics"],
+                infer_step=60,
+                guidance_scale=15.0,
+                scheduler_type="euler",
+                cfg_type="apg",
+                omega_scale=10.0,
+                manual_seeds=str(seed),
+                guidance_interval=0.5,
+                guidance_interval_decay=1.0,
+                min_guidance_scale=3.0,
+                use_erg_tag=True,
+                use_erg_lyric=True,
+                use_erg_diffusion=False,
+                oss_steps="",
+                guidance_scale_text=0.0,
+                guidance_scale_lyric=0.0,
+                audio2audio_enable=reference_audio_path is not None,
+                ref_audio_strength=0.5,
+                ref_audio_input=str(reference_audio_path) if reference_audio_path else None,
+                save_path=str(output_path),
+            )
         if not output_path.is_file() or output_path.stat().st_size == 0:
-            raise RuntimeError("ACE-Step completed without writing an audio file.")
+            raise RuntimeError("Music generation completed without writing an audio file.")
         storage.update_music_job(job_id, status="complete", message="Your song is ready.")
     except Exception as error:
         logging.exception("Music generation failed for job %s", job_id)

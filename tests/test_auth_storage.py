@@ -175,6 +175,50 @@ class AuthStorageTests(unittest.TestCase):
         self.assertEqual(pipeline.arguments["ref_audio_input"], str(reference_path))
         self.assertFalse(reference_path.exists())
 
+    def test_fal_music_generation_uses_hosted_ace_step_and_persists_result(self):
+        request = music_engine.validate_request(
+            {
+                "prompt": "A gentle melody",
+                "title": "Quiet morning",
+                "lyrics": "",
+                "genre": "Ambient",
+                "duration": 60,
+                "vocal_style": "Instrumental",
+            }
+        )
+        storage.create_music_job(
+            {
+                "id": "fal-music-job",
+                "address": "0x" + "56" * 20,
+                "request": request,
+                "status": "queued",
+                "message": "Waiting",
+                "is_public": False,
+                "created_at": 3,
+            }
+        )
+
+        with patch.object(music_engine, "MUSIC_ROOT", Path(self.temp_dir.name) / "music"), patch.object(
+            music_engine.fal_api, "is_configured", return_value=True
+        ), patch.object(
+            music_engine.fal_api,
+            "submit_and_wait",
+            return_value={"audio": {"url": "https://storage.googleapis.com/audio/song.wav"}},
+        ) as submit, patch.object(
+            music_engine.fal_api,
+            "download_file",
+            side_effect=lambda _url, destination, _limit: destination.write_bytes(b"wav"),
+        ):
+            music_engine.render_music("fal-music-job", request)
+
+        self.assertEqual(submit.call_args.args[0], music_engine.fal_api.MUSIC_MODEL)
+        self.assertEqual(submit.call_args.args[1]["lyrics"], "[inst]")
+        self.assertEqual(submit.call_args.args[1]["duration"], 60)
+        self.assertEqual(
+            storage.get_music_job("fal-music-job", "0x" + "56" * 20)["status"],
+            "complete",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

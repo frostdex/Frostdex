@@ -5,10 +5,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 import music_engine
+import server
 from server import MODEL_IDS, VIDEO_SECONDS, audio_upload_extension, dimensions_for, validate_request
 
 
 class VideoGeneratorTests(unittest.TestCase):
+    def test_fal_configuration_enables_remote_generation_without_local_gpu(self):
+        with patch("server.fal_api.is_configured", return_value=True):
+            status = server.runtime_status()
+        self.assertTrue(status["ready"])
+        self.assertEqual(status["provider"], "fal.ai")
+        self.assertIsNone(status["gpu"])
+
     def test_all_generators_make_a_five_minute_sequence(self):
         for model_key, config in MODEL_IDS.items():
             with self.subTest(model=model_key):
@@ -25,11 +33,11 @@ class VideoGeneratorTests(unittest.TestCase):
 
     def test_rejects_unavailable_models_and_malformed_prompts(self):
         base = {"prompt": "A story about a quiet mountain lake.", "format": "landscape", "style": "Cinematic"}
-        with self.assertRaisesRegex(ValueError, "available local AI generators"):
+        with self.assertRaisesRegex(ValueError, "available video generators"):
             validate_request({**base, "model": "hosted-unlimited"})
         with self.assertRaisesRegex(ValueError, "Describe the video"):
             validate_request({**base, "model": "wan21-fast", "prompt": " "})
-        with self.assertRaisesRegex(ValueError, "available local AI generators"):
+        with self.assertRaisesRegex(ValueError, "available video generators"):
             validate_request({**base, "model": ["wan21-fast"]})
 
     def test_normalizes_and_accepts_a_supported_generator(self):
@@ -41,6 +49,39 @@ class VideoGeneratorTests(unittest.TestCase):
         })
         self.assertEqual(request["prompt"], "A quiet mountain lake at sunrise.")
         self.assertEqual(request["model"], "cogvideo-2b")
+
+    def test_fal_video_renderer_requests_one_short_clip(self):
+        request = {
+            "prompt": "A quiet lake",
+            "model": "wan21-fast",
+            "format": "portrait",
+            "style": "Dreamlike",
+        }
+
+        def write_video(_url, destination, _limit):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"mp4")
+
+        with tempfile.TemporaryDirectory() as temporary_directory, patch.object(
+            server, "VIDEO_ROOT", Path(temporary_directory)
+        ), patch.object(server, "update_job") as update_job, patch.object(
+            server.fal_api,
+            "submit_and_wait",
+            return_value={"video": {"url": "https://v3b.fal.media/video.mp4"}},
+        ) as submit, patch.object(
+            server.fal_api,
+            "download_file",
+            side_effect=write_video,
+        ):
+            server.render_fal_video("video-job", request)
+            video_bytes = (Path(temporary_directory) / "video-job.mp4").read_bytes()
+
+        payload = submit.call_args.args[1]
+        self.assertEqual(submit.call_args.args[0], server.fal_api.VIDEO_MODEL)
+        self.assertEqual(payload["duration"], 5)
+        self.assertEqual(payload["aspect_ratio"], "9:16")
+        self.assertEqual(update_job.call_args.kwargs["status"], "complete")
+        self.assertEqual(video_bytes, b"mp4")
 
 
 class AudioUploadTests(unittest.TestCase):
