@@ -1,54 +1,34 @@
 # Frostwave
 
-Frostwave is a static frontend plus a persistent Python backend. The frontend is prepared for Vercel; wallet-authenticated user data and media storage stay on the backend. Set `FAL_KEY` on the backend to use Fal.ai for hosted video and music generation without a local GPU. Fal video generation creates one short clip per request; without `FAL_KEY`, generation uses the local GPU models.
+Frostwave deploys its static frontend and same-origin Node API functions to Vercel. The Vercel functions verify wallet signatures and submit video and music generation requests to Fal.ai. No separate Python API host or `FROSTWAVE_API_URL` is needed for this deployment.
 
-## Deploy the frontend to Vercel
+## Deploy on Vercel
 
-1. Import this repository into Vercel.
-2. Set the build environment variable `FROSTWAVE_API_URL` to the public HTTPS **origin** of the persistent Python backend, for example `https://gpu-api.example.com` (no path or trailing API route).
-3. Set `FROSTWAVE_WALLETCONNECT_PROJECT_ID` to the public project ID from [Reown Cloud](https://cloud.reown.com/). Optionally set `FROSTWAVE_WALLETCONNECT_CHAINS` to a comma-separated list of EVM chain IDs; it defaults to `1,10,137,8453,42161` (Ethereum, Optimism, Polygon, Base, and Arbitrum).
-4. Deploy. The included `vercel.json` builds a static site into `dist`; `.vercelignore` excludes the Python backend and its optional GPU-only dependencies.
-5. Copy the exact Vercel site origin (including `https://`) for the backend's `FROSTWAVE_ALLOWED_ORIGINS` setting. Add each production or preview origin explicitly.
+1. Import this GitHub repository into Vercel. The included build creates the static files in `dist`; functions under `api/` are deployed alongside them.
+2. In Vercel **Project Settings → Environment Variables**, set:
+   - `FAL_KEY`: your Fal.ai API key. Keep it server-side; never add it as a `NEXT_PUBLIC_` or other browser-exposed variable.
+   - `FROSTWAVE_ALLOWED_WALLET`: the public `0x...` address allowed to generate. This prevents other visitors from spending your Fal.ai balance.
+   - `FROSTWAVE_WALLETCONNECT_PROJECT_ID`: your public project ID from [Reown Cloud](https://cloud.reown.com/), if it is not already set.
+3. Redeploy after saving the variables. The API is same-origin at `https://wave-xi-ten.vercel.app/api/...`; do not set `FROSTWAVE_API_URL`.
 
-`FROSTWAVE_API_URL` is public frontend configuration, not a secret. `FAL_KEY` is a secret and belongs only in the Python backend host's environment; do not expose it in Vercel's browser-facing build configuration.
+Fal.ai charges/credits are controlled by your Fal.ai account. Vercel runs the Node functions, while Fal hosts the generated media. This integration uses one short five-second video clip per video request; Fal's ACE-Step endpoint does not support reference-audio uploads.
 
-If wallet sign-in ends with “Failed to fetch,” check that the deployed frontend was built with the live backend's `FROSTWAVE_API_URL`, and that the backend's `FROSTWAVE_ALLOWED_ORIGINS` contains the exact frontend origin (including `https://`, with no path). Redeploy the frontend after changing its build variable.
+## What is and isn't stored
 
-## Run the backend
+- Wallet jobs and favorites are stored in the current browser's local storage. They are not shared across browsers or devices; clearing browser data removes them.
+- Discover sharing is disabled because this setup has no shared database.
+- Wallet sessions are stateless and last one hour. Signing out clears the browser session but cannot revoke a copied token server-side. Sign-in challenges expire after five minutes; without a database they are not recorded as one-time-use.
+- Generated media URLs are served by Fal.ai; follow Fal.ai's terms and retention behavior for generated files.
 
-Use a persistent Linux host with internet access and disk space for generated media. To use Fal.ai, set `FAL_KEY` in this host's environment. Requests to Fal.ai may consume account credits or incur charges; pricing and available credits depend on your Fal.ai account. Without `FAL_KEY`, install the optional GPU dependencies and use a supported NVIDIA GPU.
+## Optional local Python engine
 
-1. For local GPU generation, install a PyTorch build matching the host's CUDA setup using [the PyTorch selector](https://pytorch.org/get-started/locally/).
-2. Install the backend requirements and launch it:
-
-   ```sh
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   # For local GPU generation instead of Fal.ai:
-   # pip install -r requirements-gpu.txt
-   cp .env.example .env
-   # Set FAL_KEY and FROSTWAVE_ALLOWED_ORIGINS to your exact Vercel site origin.
-   set -a && . ./.env && set +a
-   python server.py
-   ```
-
-3. Put the backend behind HTTPS using a reverse proxy or a trusted TLS ingress. Allow request bodies up to 32 MB for reference-audio uploads. The server itself binds to loopback by default. `FROSTWAVE_BIND_HOST=0.0.0.0` enables access through the host's network interface; do not expose the plain HTTP port directly to the internet.
-4. Keep `FROSTWAVE_DATA_DIR` on a persistent disk/volume. SQLite holds wallet sessions and job history there; MP4s and WAVs are saved under its `videos/` and `music/` directories. Back up this directory. Optionally set `FROSTWAVE_VIDEO_RETENTION_DAYS` to automatically remove completed/failed media at startup; its default `0` keeps media indefinitely.
-
-For local development, leave the bind host unset, set allowed origins to `http://127.0.0.1:8000,http://localhost:8000`, and open `http://127.0.0.1:8000`.
-
-## Wallet and generation behavior
-
-- Sign-in uses WalletConnect with an EIP-4361-style one-time challenge signed by the wallet. The server verifies the signature, stores only a hash of the revocable session token, and scopes video and music jobs to the wallet address. No Google account, email, or on-chain transaction is required.
-- When `FAL_KEY` is configured, the backend sends one short video request or a music request to Fal.ai. Fal.ai usage can consume account credits or be billed; Frostwave does not check or cap the account balance. The Fal.ai ACE-Step endpoint does not accept the app's optional reference-audio uploads.
-- Without `FAL_KEY`, jobs use the local GPU models; five-minute videos are assembled from many short shots and trimmed to 300 seconds. The MP4 output is silent. Local music jobs use ACE-Step, and optional WAV, MP3, FLAC, or OGG reference clips guide audio-to-audio generation.
-- Vercel deploys only the static website. It cannot run this persistent Python API or store its SQLite database/video files.
+The original Python service remains available for local GPU generation. Install `requirements.txt`; for video or ACE-Step music generation, also install a CUDA-enabled PyTorch build and `requirements-gpu.txt`. Set `FROSTWAVE_BIND_HOST=127.0.0.1`, `FROSTWAVE_PORT=8000`, and run `python server.py`.
 
 ## Tests and build
 
 ```sh
 node --check app.js
 npm run build
+npm run test:api
 python3 -m unittest discover -s tests
 ```

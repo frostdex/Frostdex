@@ -1,6 +1,9 @@
 const AUTH_STORAGE_KEY = "frostwave-session-v1";
 const THEME_STORAGE_KEY = "frostwave-theme-v1";
 const API_BASE_URL = String(window.FROSTWAVE_CONFIG?.apiBaseUrl || "").replace(/\/+$/, "");
+const VIDEO_JOBS_STORAGE_PREFIX = "frostwave-video-jobs-v1:";
+const MUSIC_JOBS_STORAGE_PREFIX = "frostwave-music-jobs-v1:";
+const FAVORITES_STORAGE_PREFIX = "frostwave-music-favorites-v1:";
 const ideas = [
   "A warm, slow-dancing soul song for a kitchen at midnight",
   "An instrumental soundtrack for getting lost in a new city",
@@ -83,18 +86,57 @@ function apiUrl(path) {
   return `${API_BASE_URL}${path}`;
 }
 
-function apiFetch(path, options = {}) {
-  if (!API_BASE_URL && !["localhost", "127.0.0.1"].includes(window.location.hostname)) {
-    return Promise.reject(new Error(
-      "FROSTWAVE_API_URL isn't configured. Set it in Vercel to the public HTTPS origin of your Python backend, then redeploy.",
-    ));
+function mediaUrl(path) {
+  return new URL(path, API_BASE_URL || window.location.origin).toString();
+}
+
+function localJobsKey(kind) {
+  const address = walletAddress?.toLowerCase();
+  if (!address) return null;
+  return `${kind === "video" ? VIDEO_JOBS_STORAGE_PREFIX : MUSIC_JOBS_STORAGE_PREFIX}${address}`;
+}
+
+function getLocalJobs(kind) {
+  const key = localJobsKey(kind);
+  if (!key) return [];
+  const saved = localStorage.getItem(key);
+  if (!saved) return [];
+  try {
+    const jobs = JSON.parse(saved);
+    return Array.isArray(jobs) ? jobs.filter((job) => job && typeof job.id === "string") : [];
+  } catch {
+    localStorage.removeItem(key);
+    showToast("Couldn't read the saved local job list; it has been reset.", true);
+    return [];
   }
+}
+
+function saveLocalJob(kind, job) {
+  const key = localJobsKey(kind);
+  if (!key) return;
+  const jobs = getLocalJobs(kind).filter((saved) => saved.id !== job.id);
+  jobs.unshift(job);
+  localStorage.setItem(key, JSON.stringify(jobs.slice(0, 10)));
+}
+
+function localFavoriteIds() {
+  const address = walletAddress?.toLowerCase();
+  if (!address) return [];
+  try {
+    const favorites = JSON.parse(localStorage.getItem(`${FAVORITES_STORAGE_PREFIX}${address}`) || "[]");
+    return Array.isArray(favorites) ? favorites.filter((id) => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
   return fetch(apiUrl(path), { ...options, headers }).catch((error) => {
     if (error instanceof TypeError) {
       throw new Error(
-        "Couldn't reach the Frostwave API. Check that FROSTWAVE_API_URL points to the live HTTPS backend and that FROSTWAVE_ALLOWED_ORIGINS includes this site's exact origin.",
+        "Couldn't reach the Frostwave API. Check that this Vercel deployment includes the /api functions and is online.",
       );
     }
     throw error;
@@ -363,7 +405,7 @@ function renderDiscover(filter = "All", query = "") {
           <button class="icon-button" data-action="remix" data-title="${escapeHtml(track.title)}" data-genre="${escapeHtml(track.genre)}" aria-label="Use ${escapeHtml(track.title)} as inspiration" title="Use as inspiration">↗</button>
         </div>
       </article>`).join("")
-    : `<div class="no-results">${discoveries.length ? "No tracks found. Try another search or genre." : "Community songs people choose to share will appear here."}</div>`;
+    : `<div class="no-results">${discoveries.length ? "No tracks found. Try another search or genre." : "Community Discover needs shared storage, which isn't enabled in this Vercel setup."}</div>`;
 }
 
 function switchView(name) {
@@ -484,6 +526,7 @@ createButton.addEventListener("click", async () => {
       }),
     });
     const job = await readApiResponse(response);
+    saveLocalJob("music", job);
     uploadedReferenceId = null;
     activeMusicJob = job.id;
     await loadMusicJobs();
@@ -568,6 +611,8 @@ function configureGenerationMode() {
   document.querySelector(".free-note div span").textContent = falMode
     ? "Fal.ai generations may be billed."
     : "Every creative tool is free.";
+  document.querySelector(".share-option").hidden = falMode;
+  document.querySelector("#share-song").checked = false;
   audioDropzone.disabled = falMode;
   audioReferenceInput.disabled = falMode;
   if (falMode) {
@@ -583,8 +628,7 @@ async function readApiResponse(response) {
   if (!response.ok) {
     const message = typeof data.error === "string" ? data.error : `Frostwave API returned ${response.status}.`;
     if (response.status === 404 && (message === "Not found." || message.startsWith("Frostwave API returned"))) {
-      const path = new URL(response.url).pathname;
-      throw new Error(`${message} The backend doesn't recognize ${path}; check that FROSTWAVE_API_URL points to your backend origin and that it's running the current Frostwave server.`);
+      throw new Error(`${message} Vercel couldn't find this API function. Redeploy the latest GitHub commit and check the Vercel function logs.`);
     }
     throw new Error(message);
   }
@@ -611,6 +655,8 @@ async function pollVideoJob(jobId) {
   try {
     const response = await apiFetch(`/api/video/jobs/${encodeURIComponent(jobId)}`);
     const job = await readApiResponse(response);
+    const savedJob = getLocalJobs("video").find((saved) => saved.id === jobId);
+    saveLocalJob("video", { ...savedJob, ...job });
     videoProgress.hidden = false;
     document.querySelector("#video-progress-bar").max = job.total_clips || 60;
     document.querySelector("#video-progress-bar").value = job.progress || 0;
@@ -674,9 +720,20 @@ function renderVideoJobs(jobs) {
 async function loadVideoJobs() {
   if (!sessionToken) return;
   try {
-    const response = await apiFetch("/api/video/jobs");
+    const savedJobs = getLocalJobs("video");
+    if (savedJobs.length === 0) {
+      renderVideoJobs([]);
+      return;
+    }
+    const ids = savedJobs.map((job) => job.id).join(",");
+    const response = await apiFetch(`/api/video/jobs?ids=${encodeURIComponent(ids)}`);
     const data = await readApiResponse(response);
-    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    const remoteJobs = Array.isArray(data.jobs) ? data.jobs : [];
+    const jobs = remoteJobs.map((job) => ({
+      ...savedJobs.find((saved) => saved.id === job.id),
+      ...job,
+    }));
+    jobs.forEach((job) => saveLocalJob("video", job));
     renderVideoJobs(jobs);
     const activeJob = jobs.find((job) => ["queued", "loading", "rendering", "assembling"].includes(job.status));
     if (activeJob && activeJob.id !== activeVideoJob) {
@@ -694,11 +751,10 @@ async function openVideo(jobId) {
   try {
     const ticketResponse = await apiFetch(`/api/video/jobs/${encodeURIComponent(jobId)}/ticket`, { method: "POST" });
     const ticket = await readApiResponse(ticketResponse);
-    const mediaUrl = apiUrl(ticket.video_url);
+    const videoMediaUrl = mediaUrl(ticket.video_url);
     const video = document.querySelector("#generated-video");
-    video.crossOrigin = "anonymous";
-    video.src = mediaUrl;
-    document.querySelector("#download-video").href = `${mediaUrl}&download=1`;
+    video.src = videoMediaUrl;
+    document.querySelector("#download-video").href = videoMediaUrl;
     document.querySelector("#video-output").hidden = false;
   } catch (error) {
     showToast(`Couldn't open your video: ${error.message}`, true);
@@ -709,7 +765,7 @@ async function playMusic(jobId) {
   try {
     const response = await apiFetch(`/api/music/jobs/${encodeURIComponent(jobId)}/ticket`, { method: "POST" });
     const ticket = await readApiResponse(response);
-    const audioUrl = apiUrl(ticket.audio_url);
+    const audioUrl = mediaUrl(ticket.audio_url);
     const player = document.querySelector("#music-player");
     const track = [...tracks, ...discoveries].find((item) => item.id === jobId);
     player.src = audioUrl;
@@ -729,9 +785,23 @@ async function loadMusicJobs() {
     return;
   }
   try {
-    const response = await apiFetch("/api/music/jobs");
+    const savedJobs = getLocalJobs("music");
+    if (savedJobs.length === 0) {
+      tracks = [];
+      renderLibrary();
+      return;
+    }
+    const ids = savedJobs.map((job) => job.id).join(",");
+    const response = await apiFetch(`/api/music/jobs?ids=${encodeURIComponent(ids)}`);
     const data = await readApiResponse(response);
-    tracks = Array.isArray(data.jobs) ? data.jobs : [];
+    const remoteJobs = Array.isArray(data.jobs) ? data.jobs : [];
+    const favoriteIds = new Set(localFavoriteIds());
+    tracks = remoteJobs.map((job) => ({
+      ...savedJobs.find((saved) => saved.id === job.id),
+      ...job,
+      favorite: favoriteIds.has(job.id),
+    }));
+    tracks.forEach((track) => saveLocalJob("music", track));
     renderLibrary();
   } catch (error) {
     showToast(`Couldn't load your music library: ${error.message}`, true);
@@ -742,6 +812,8 @@ async function pollMusicJob(jobId) {
   try {
     const response = await apiFetch(`/api/music/jobs/${encodeURIComponent(jobId)}`);
     const job = await readApiResponse(response);
+    const savedJob = getLocalJobs("music").find((saved) => saved.id === jobId);
+    saveLocalJob("music", { ...savedJob, ...job });
     if (job.status === "complete") {
       activeMusicJob = null;
       messageArea.textContent = "Your song is ready.";
@@ -795,6 +867,7 @@ videoButton.addEventListener("click", async () => {
       }),
     });
     const job = await readApiResponse(response);
+    saveLocalJob("video", job);
     activeVideoJob = job.id;
     videoButton.querySelector("span:first-child").textContent = "Rendering…";
     pollVideoJob(job.id);
@@ -821,10 +894,14 @@ document.addEventListener("click", (event) => {
   if (action === "open-video") {
     openVideo(id);
   } else if (action === "favorite-music") {
-    apiFetch(`/api/music/jobs/${encodeURIComponent(id)}/favorite`, { method: "POST" })
-      .then(readApiResponse)
-      .then(loadMusicJobs)
-      .catch((error) => showToast(`Couldn't update favorite: ${error.message}`, true));
+    const favorites = new Set(localFavoriteIds());
+    if (favorites.has(id)) favorites.delete(id);
+    else favorites.add(id);
+    const address = walletAddress?.toLowerCase();
+    if (address) localStorage.setItem(`${FAVORITES_STORAGE_PREFIX}${address}`, JSON.stringify([...favorites]));
+    tracks = tracks.map((track) => track.id === id ? { ...track, favorite: favorites.has(id) } : track);
+    tracks.forEach((track) => saveLocalJob("music", track));
+    renderLibrary();
   } else if (action === "preview-music") {
     playMusic(id);
   } else if (action === "remix") {
