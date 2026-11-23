@@ -90,7 +90,14 @@ function apiFetch(path, options = {}) {
   }
   const headers = new Headers(options.headers || {});
   if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
-  return fetch(apiUrl(path), { ...options, headers });
+  return fetch(apiUrl(path), { ...options, headers }).catch((error) => {
+    if (error instanceof TypeError) {
+      throw new Error(
+        "Couldn't reach the Frostwave API. Check that FROSTWAVE_API_URL points to the live HTTPS backend and that FROSTWAVE_ALLOWED_ORIGINS includes this site's exact origin.",
+      );
+    }
+    throw error;
+  });
 }
 
 async function getWalletConnectProvider() {

@@ -12,6 +12,8 @@ Frostwave is a static frontend plus a self-hosted Python GPU backend. The fronte
 
 `FROSTWAVE_API_URL` is public frontend configuration, not a secret. Do not put private keys, GPU credentials, or wallet secrets in Vercel's browser-exposed environment.
 
+If wallet sign-in ends with “Failed to fetch,” check that the deployed frontend was built with the live backend's `FROSTWAVE_API_URL`, and that the backend's `FROSTWAVE_ALLOWED_ORIGINS` contains the exact frontend origin (including `https://`, with no path). Redeploy the frontend after changing its build variable.
+
 ## Run the GPU backend
 
 Use a persistent Linux host with a supported NVIDIA GPU, CUDA-enabled PyTorch, internet access for first model downloads, and disk space for generated media. Wan 2.1 1.3B needs about 8.2 GB of VRAM; CogVideoX 2B can use sequential CPU offload but will be slower. Larger models need substantially more VRAM. ACE-Step downloads its model weights on first use and needs additional GPU memory and storage.
