@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { after, before, test } = require("node:test");
 const { Wallet } = require("ethers");
 const { handleApiRequest } = require("../vercel-api");
-const apiHandler = require("../api/[...path].js");
+const apiHandler = require("../api/index.js");
 
 const wallet = Wallet.createRandom();
 const previousEnvironment = {
@@ -213,4 +213,17 @@ test("routes from the request URL when Vercel omits the catch-all query", async 
   }, response);
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.body, { tracks: [] });
+});
+
+test("routes nested auth paths from the vercel.json rewrite", async () => {
+  const response = makeResponse();
+  await apiHandler({
+    method: "POST",
+    url: "/api/index?__route=/api/auth/nonce",
+    headers: { host: "wave.example", origin: "https://wave.example", "content-type": "application/json" },
+    body: { address: wallet.address, chain_id: 1 },
+    query: { __route: "/api/auth/nonce" },
+  }, response);
+  assert.equal(response.statusCode, 200);
+  assert.ok(response.body.message || response.body.nonce);
 });
