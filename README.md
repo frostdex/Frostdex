@@ -7,7 +7,6 @@ Frostwave deploys its static frontend and same-origin Node API functions to Verc
 1. Import this GitHub repository into Vercel. The included build creates the static files in `dist`; functions under `api/` are deployed alongside them.
 2. In Vercel **Project Settings → Environment Variables**, set:
    - `FAL_KEY`: your Fal.ai API key. Keep it server-side; never add it as a `NEXT_PUBLIC_` or other browser-exposed variable.
-   - `FROSTWAVE_ALLOWED_WALLET`: the public `0x...` address allowed to generate. This prevents other visitors from spending your Fal.ai balance.
    - `FROSTWAVE_WALLETCONNECT_PROJECT_ID`: your public project ID from [Reown Cloud](https://cloud.reown.com/), if it is not already set.
 3. Redeploy after saving the variables. The API is same-origin at `https://wave-xi-ten.vercel.app/api/...`; do not set `FROSTWAVE_API_URL`.
 

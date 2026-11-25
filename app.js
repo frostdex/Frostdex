@@ -224,17 +224,18 @@ async function connectWallet() {
     const approved = approvedWalletAccount(provider);
     if (!approved) throw new Error("WalletConnect didn't return an account.");
     const { address, chainId } = approved;
-    provider.signer.setDefaultChain(`eip155:${chainId}`);
     const challengeResponse = await apiFetch("/api/auth/nonce", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ address, chain_id: chainId }),
     });
     const challenge = await readApiResponse(challengeResponse);
-    const signature = await provider.request({
-      method: "personal_sign",
-      params: [challenge.message, address],
-    });
+    // provider.request() always targets the provider's own chainId (mainnet by default)
+    // and ignores signer.setDefaultChain(), so address the approved chain explicitly.
+    const signature = await provider.signer.request(
+      { method: "personal_sign", params: [challenge.message, address] },
+      `eip155:${chainId}`,
+    );
     const verifyResponse = await apiFetch("/api/auth/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

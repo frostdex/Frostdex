@@ -7,11 +7,11 @@ module.exports = async function handler(req, res) {
     return handled;
   } catch (error) {
     const message = error instanceof Error ? error.message : "The request couldn't be completed.";
-    const status = /isn't allowed|origin isn't allowed/.test(message)
+    const status = /origin isn't allowed/.test(message)
       ? 403
       : /Connect your wallet|expired|belongs to another wallet/.test(message)
         ? 401
-        : /FAL_KEY|FROSTWAVE_ALLOWED_WALLET/.test(message)
+        : /FAL_KEY/.test(message)
           ? 503
           : /timed out|TimeoutError/i.test(message)
             ? 504
