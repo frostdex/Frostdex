@@ -492,11 +492,17 @@ async function handleMusic(req, res, path) {
   return false;
 }
 
-// Outside Next.js, Vercel doesn't reliably expose the `[...path]` catch-all as
-// `req.query.path`, so the request URL is the source of truth for routing.
+// Every /api/* request is rewritten (vercel.json) to the single /api/index
+// function with the original route in `__route`. Outside Next.js Vercel doesn't
+// route nested paths to a `[...path]` catch-all, hence the explicit rewrite.
 function resolveApiPath(req) {
-  const pathname = typeof req.url === "string" ? new URL(req.url, "http://localhost").pathname : "";
-  if (pathname.startsWith("/api/")) return pathname.replace(/\/+$/, "");
+  const url = new URL(typeof req.url === "string" ? req.url : "/", "http://localhost");
+  const pathname = url.pathname.replace(/\/+$/, "");
+  if (pathname === "/api/index" || pathname === "/api") {
+    const route = url.searchParams.get("__route");
+    if (route && route.startsWith("/api/")) return route.replace(/\/+$/, "");
+  }
+  if (pathname.startsWith("/api/")) return pathname;
   const query = req.query || {};
   const captured = query.path ?? query["...path"];
   const parts = (Array.isArray(captured) ? captured : [captured])
