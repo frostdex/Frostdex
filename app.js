@@ -176,8 +176,7 @@ async function getWalletConnectProvider() {
     }
     walletProvider = await EthereumProvider.init({
       projectId,
-      chains: [chains[0]],
-      optionalChains: chains.slice(1),
+      optionalChains: chains,
       showQrModal: true,
     });
     walletProvider.on("accountsChanged", (accounts) => {
@@ -199,21 +198,23 @@ async function getWalletConnectProvider() {
   return walletProviderPromise;
 }
 
-// The wallet may approve a different set of chains than the one the provider
-// defaults to (the first configured chain). Requests sent to a chain outside the
-// approved session fail with "Missing or invalid. request() chainId", so sign on
-// the chain of the account the wallet actually approved.
+// All configured chains are optional, so the wallet approves whichever it
+// supports. Requests sent to a chain outside the approved session fail with
+// "Missing or invalid. request() chainId", so sign on a chain the wallet actually
+// approved, preferring the one it is currently on.
 function approvedWalletAccount(provider) {
   const sessionAccounts = provider.session?.namespaces?.eip155?.accounts;
   if (!Array.isArray(sessionAccounts)) return null;
+  const approved = [];
   for (const caipAccount of sessionAccounts) {
     const [namespace, reference, address] = String(caipAccount).split(":");
     const chainId = Number(reference);
     if (namespace === "eip155" && Number.isSafeInteger(chainId) && chainId >= 1 && typeof address === "string" && address) {
-      return { address, chainId };
+      approved.push({ address, chainId });
     }
   }
-  return null;
+  const activeChainId = Number(provider.chainId);
+  return approved.find((account) => account.chainId === activeChainId) || approved[0] || null;
 }
 
 async function connectWallet() {
