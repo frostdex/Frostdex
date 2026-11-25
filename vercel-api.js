@@ -492,10 +492,23 @@ async function handleMusic(req, res, path) {
   return false;
 }
 
+// Outside Next.js, Vercel doesn't reliably expose the `[...path]` catch-all as
+// `req.query.path`, so the request URL is the source of truth for routing.
+function resolveApiPath(req) {
+  const pathname = typeof req.url === "string" ? new URL(req.url, "http://localhost").pathname : "";
+  if (pathname.startsWith("/api/")) return pathname.replace(/\/+$/, "");
+  const query = req.query || {};
+  const captured = query.path ?? query["...path"];
+  const parts = (Array.isArray(captured) ? captured : [captured])
+    .filter(Boolean)
+    .flatMap((part) => String(part).split("/"))
+    .filter(Boolean);
+  return `/api/${parts.join("/")}`;
+}
+
 async function handleApiRequest(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
-  const parts = Array.isArray(req.query.path) ? req.query.path : [req.query.path].filter(Boolean);
-  const path = `/api/${parts.join("/")}`;
+  const path = resolveApiPath(req);
   if (path === "/api/discover" && req.method === "GET") return res.status(200).json({ tracks: [] });
   if (path.startsWith("/api/auth/")) return handleAuth(req, res, path);
   if (path === "/api/video/health") return handleVideo(req, res, path);
