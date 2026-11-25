@@ -202,3 +202,15 @@ test("Fal music requests disable public sharing and preserve user metadata", asy
   assert.equal(ticketResponse.statusCode, 200);
   assert.equal(ticketResponse.body.audio_url, "https://v3b.fal.media/generated.mp3");
 });
+
+test("routes from the request URL when Vercel omits the catch-all query", async () => {
+  const response = makeResponse();
+  await apiHandler({
+    method: "GET",
+    url: "/api/discover?limit=5",
+    headers: { host: "wave.example", origin: "https://wave.example" },
+    query: { limit: "5" },
+  }, response);
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.body, { tracks: [] });
+});
