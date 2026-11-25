@@ -8,18 +8,6 @@ const VIDEO_MODEL = "minimax/h3-max/text-to-video";
 const MUSIC_MODEL = "fal-ai/ace-step";
 const QUEUE_ROOT = "https://queue.fal.run";
 
-function allowedWallet() {
-  const configured = process.env.FROSTWAVE_ALLOWED_WALLET;
-  if (!configured || !/^0x[0-9a-f]{40}$/i.test(configured)) {
-    throw new Error("Set FROSTWAVE_ALLOWED_WALLET in Vercel to the wallet address allowed to generate.");
-  }
-  try {
-    return getAddress(configured).toLowerCase();
-  } catch {
-    throw new Error("FROSTWAVE_ALLOWED_WALLET must be a valid EVM wallet address.");
-  }
-}
-
 function secret() {
   const key = process.env.FAL_KEY;
   if (!key) throw new Error("Fal.ai isn't configured. Add FAL_KEY to the Vercel environment variables and redeploy.");
@@ -89,9 +77,6 @@ function getAddressFromToken(req) {
     || claims.exp <= Math.floor(Date.now() / 1000)
   ) {
     throw new Error("Your sign-in expired. Connect your wallet again.");
-  }
-  if (claims.address !== allowedWallet()) {
-    throw new Error("This wallet isn't allowed to use Fal generation.");
   }
   return claims.address;
 }
@@ -233,9 +218,6 @@ async function handleAuth(req, res, path) {
       throw new Error("The connected wallet returned an invalid chain ID.");
     }
     const address = getAddress(body.address);
-    if (address.toLowerCase() !== allowedWallet()) {
-      throw new Error("This wallet isn't allowed to use Fal generation.");
-    }
     const issued = Math.floor(Date.now() / 1000);
     const nonce = encodeSigned({
       type: "nonce",
@@ -315,22 +297,13 @@ function parseJobIds(value) {
 async function handleVideo(req, res, path) {
   if (path === "/api/video/health" && req.method === "GET") {
     const configured = Boolean(process.env.FAL_KEY?.trim());
-    let walletConfigured = false;
-    try {
-      allowedWallet();
-      walletConfigured = true;
-    } catch {
-      walletConfigured = false;
-    }
     return res.status(200).json({
-      ready: configured && walletConfigured,
+      ready: configured,
       provider: "fal.ai",
       gpu: null,
-      message: !configured
-        ? "Add FAL_KEY to the Vercel environment variables, then redeploy."
-        : !walletConfigured
-          ? "Add FROSTWAVE_ALLOWED_WALLET to Vercel with the allowed public wallet address, then redeploy."
-          : "fal.ai is ready. Generation may consume account credits or be billed.",
+      message: configured
+        ? "fal.ai is ready. Generation may consume account credits or be billed."
+        : "Add FAL_KEY to the Vercel environment variables, then redeploy.",
       queued_jobs: 0,
     });
   }

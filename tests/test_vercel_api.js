@@ -7,11 +7,9 @@ const apiHandler = require("../api/index.js");
 const wallet = Wallet.createRandom();
 const previousEnvironment = {
   FAL_KEY: process.env.FAL_KEY,
-  FROSTWAVE_ALLOWED_WALLET: process.env.FROSTWAVE_ALLOWED_WALLET,
 };
 const previousFetch = global.fetch;
 process.env.FAL_KEY = "test-fal-key";
-process.env.FROSTWAVE_ALLOWED_WALLET = wallet.address;
 
 function makeRequest(path, { method = "GET", headers = {}, body, query = {} } = {}) {
   const parts = path.split("/").filter(Boolean);
@@ -66,7 +64,7 @@ after(() => {
   }
 });
 
-test("wallet challenge signs in only the configured wallet", async () => {
+test("wallet challenge signs in with a signed message", async () => {
   const challengeResponse = await callApi("/api/auth/nonce", {
     method: "POST",
     body: { address: wallet.address, chain_id: 1 },
@@ -89,15 +87,19 @@ test("wallet challenge signs in only the configured wallet", async () => {
   assert.equal(meResponse.body.address.toLowerCase(), wallet.address.toLowerCase());
 });
 
-test("wallet challenge rejects a different wallet", async () => {
+test("any wallet can sign in and only reads its own jobs", async () => {
   const otherWallet = Wallet.createRandom();
-  await assert.rejects(
-    callApi("/api/auth/nonce", {
-      method: "POST",
-      body: { address: otherWallet.address, chain_id: 1 },
-    }),
-    /isn't allowed/,
-  );
+  const challenge = await callApi("/api/auth/nonce", {
+    method: "POST",
+    body: { address: otherWallet.address, chain_id: 8453 },
+  });
+  const signature = await otherWallet.signMessage(challenge.body.message);
+  const verified = await callApi("/api/auth/verify", {
+    method: "POST",
+    body: { address: otherWallet.address, nonce: challenge.body.nonce, signature },
+  });
+  assert.equal(verified.body.address.toLowerCase(), otherWallet.address.toLowerCase());
+  assert.notEqual(verified.body.token, sessionToken);
 });
 
 test("Vercel catch-all routes health and returns auth failures as 401", async () => {
