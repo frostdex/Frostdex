@@ -199,31 +199,45 @@ async function getWalletConnectProvider() {
   return walletProviderPromise;
 }
 
+// The wallet may approve a different set of chains than the one the provider
+// defaults to (the first configured chain). Requests sent to a chain outside the
+// approved session fail with "Missing or invalid. request() chainId", so sign on
+// the chain of the account the wallet actually approved.
+function approvedWalletAccount(provider) {
+  const sessionAccounts = provider.session?.namespaces?.eip155?.accounts;
+  if (!Array.isArray(sessionAccounts)) return null;
+  for (const caipAccount of sessionAccounts) {
+    const [namespace, reference, address] = String(caipAccount).split(":");
+    const chainId = Number(reference);
+    if (namespace === "eip155" && Number.isSafeInteger(chainId) && chainId >= 1 && typeof address === "string" && address) {
+      return { address, chainId };
+    }
+  }
+  return null;
+}
+
 async function connectWallet() {
   try {
     const provider = await getWalletConnectProvider();
     await provider.connect();
-    const accounts = await provider.request({ method: "eth_accounts" });
-    if (!Array.isArray(accounts) || typeof accounts[0] !== "string") {
-      throw new Error("WalletConnect didn't return an account.");
-    }
-    const chainIdHex = await provider.request({ method: "eth_chainId" });
-    const chainId = Number.parseInt(chainIdHex, 16);
-    if (!Number.isSafeInteger(chainId) || chainId < 1) throw new Error("The wallet returned an invalid network.");
+    const approved = approvedWalletAccount(provider);
+    if (!approved) throw new Error("WalletConnect didn't return an account.");
+    const { address, chainId } = approved;
+    provider.signer.setDefaultChain(`eip155:${chainId}`);
     const challengeResponse = await apiFetch("/api/auth/nonce", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ address: accounts[0], chain_id: chainId }),
+      body: JSON.stringify({ address, chain_id: chainId }),
     });
     const challenge = await readApiResponse(challengeResponse);
     const signature = await provider.request({
       method: "personal_sign",
-      params: [challenge.message, accounts[0]],
+      params: [challenge.message, address],
     });
     const verifyResponse = await apiFetch("/api/auth/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ address: accounts[0], nonce: challenge.nonce, signature }),
+      body: JSON.stringify({ address, nonce: challenge.nonce, signature }),
     });
     const session = await readApiResponse(verifyResponse);
     sessionToken = session.token;
