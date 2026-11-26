@@ -30,7 +30,7 @@ let walletProviderPromise = null;
 let walletConnectScriptPromise = null;
 let activeVideoJob = null;
 let activeMusicJob = null;
-let falMode = false;
+let hostedMode = false;
 let sessionToken = sessionStorage.getItem(AUTH_STORAGE_KEY);
 let tracks = [];
 let discoveries = [];
@@ -320,8 +320,8 @@ function clearAudioReference() {
 }
 
 function chooseAudioReference(file) {
-  if (falMode) {
-    audioReferenceStatus.textContent = "Fal.ai music generation doesn't support reference audio clips.";
+  if (hostedMode) {
+    audioReferenceStatus.textContent = "Hugging Face music generation doesn't support reference audio clips.";
     return;
   }
   const extension = file.name.split(".").pop().toLowerCase();
@@ -380,7 +380,7 @@ audioDropzone.addEventListener("dragleave", () => audioDropzone.classList.remove
 audioDropzone.addEventListener("drop", (event) => {
   event.preventDefault();
   audioDropzone.classList.remove("is-dragging");
-  if (falMode) return;
+  if (hostedMode) return;
   const [file] = event.dataTransfer.files;
   if (file) chooseAudioReference(file);
 });
@@ -512,7 +512,7 @@ createButton.addEventListener("click", async () => {
   createButton.disabled = true;
   createButton.querySelector("span:first-child").textContent = selectedReferenceAudio
     ? "Uploading audio…"
-    : falMode ? "Sending to fal.ai…" : "Sending to your GPU…";
+    : hostedMode ? "Sending to Hugging Face…" : "Sending to your GPU…";
   messageArea.textContent = "";
   try {
     let generationDuration = selectedReferenceAudioDuration;
@@ -525,7 +525,7 @@ createButton.addEventListener("click", async () => {
       const upload = await readApiResponse(uploadResponse);
       uploadedReferenceId = upload.id;
       generationDuration = upload.duration_seconds;
-      createButton.querySelector("span:first-child").textContent = falMode ? "Sending to fal.ai…" : "Sending to your GPU…";
+      createButton.querySelector("span:first-child").textContent = hostedMode ? "Sending to Hugging Face…" : "Sending to your GPU…";
     }
     const response = await apiFetch("/api/music/jobs", {
       method: "POST",
@@ -547,8 +547,8 @@ createButton.addEventListener("click", async () => {
     activeMusicJob = job.id;
     await loadMusicJobs();
     pollMusicJob(job.id);
-    messageArea.textContent = falMode
-      ? "Your song is queued on fal.ai. Usage may consume account credits or be billed; you can follow progress in Your library."
+    messageArea.textContent = hostedMode
+      ? "Your song is queued on Hugging Face ZeroGPU. Free accounts have a limited daily GPU quota; follow progress in Your library."
       : "Your song is queued on your local GPU. You can follow its progress in Your library.";
   } catch (error) {
     messageArea.textContent = error.message;
@@ -600,40 +600,40 @@ function configureGenerationMode() {
   const modelField = document.querySelector("#video-model").closest(".control-field");
   const videoDuration = document.querySelector("#video-duration");
   const audioDropzone = document.querySelector("#audio-reference-browse");
-  modelField.hidden = falMode;
-  videoDuration.firstChild.textContent = falMode ? "5 seconds " : "5 minutes ";
-  videoButton.querySelector("span:first-child").textContent = falMode ? "Create 5-second clip" : "Create 5-minute video";
-  document.querySelector(".video-heading p").textContent = falMode
-    ? "Describe a moment and create one short video clip with fal.ai."
+  modelField.hidden = hostedMode;
+  videoDuration.firstChild.textContent = hostedMode ? "3.5 seconds " : "5 minutes ";
+  videoButton.querySelector("span:first-child").textContent = hostedMode ? "Create 3.5-second clip" : "Create 5-minute video";
+  document.querySelector(".video-heading p").textContent = hostedMode
+    ? "Describe a moment and create one short video clip with Wan 2.2."
     : "Describe a world, a moment, or a story. Shape a five-minute video from your imagination, rendered on your own GPU.";
-  document.querySelector("#video-generation-cost").textContent = falMode
-    ? "fal.ai · usage may be billed"
+  document.querySelector("#video-generation-cost").textContent = hostedMode
+    ? "Hugging Face ZeroGPU · free daily quota"
     : "Free · No usage limits";
-  document.querySelector(".video-free-note strong").textContent = falMode
-    ? "fal.ai usage may consume account credits or be billed."
+  document.querySelector(".video-free-note strong").textContent = hostedMode
+    ? "Hugging Face ZeroGPU has a limited daily GPU quota."
     : "No service fees or app quotas.";
-  document.querySelector(".video-free-note p").textContent = falMode
-    ? "Each video request creates one short clip. Check fal.ai pricing and your account balance before generating."
+  document.querySelector(".video-free-note p").textContent = hostedMode
+    ? "Each request creates one short clip. The free quota is shared with music generation and may run out for the day."
     : "Choose from five open models. Rendering runs locally on your GPU and uses your electricity and disk space.";
-  document.querySelector(".video-backend-note p").textContent = falMode
-    ? "Fal.ai generates one short video clip per request. Fal.ai usage may consume your account balance or be billed; Frostwave cannot check or limit your Fal.ai balance."
+  document.querySelector(".video-backend-note p").textContent = hostedMode
+    ? "Wan 2.2 generates one short clip per request through Hugging Face ZeroGPU. Free accounts have a limited daily GPU quota; queue availability depends on Hugging Face."
     : "Five-minute videos are assembled from short generated shots and trimmed to exactly five minutes. Rendering is sequential and can take hours; the selected model's weights download the first time you use it. The local queue has no app-imposed generation cap.";
-  document.querySelector("#music-generation-cost").textContent = falMode
-    ? "Fal.ai usage may be billed"
+  document.querySelector("#music-generation-cost").textContent = hostedMode
+    ? "Hugging Face ZeroGPU · free daily quota"
     : "Free to create";
-  document.querySelector(".free-label .no-limits").textContent = falMode
-    ? "· Check your Fal.ai account credits"
+  document.querySelector(".free-label .no-limits").textContent = hostedMode
+    ? "· Daily GPU quota is limited"
     : "· No credits or paywalls";
-  document.querySelector(".free-note div span").textContent = falMode
-    ? "Fal.ai generations may be billed."
+  document.querySelector(".free-note div span").textContent = hostedMode
+    ? "Free Hugging Face ZeroGPU quota may run out."
     : "Every creative tool is free.";
-  document.querySelector(".share-option").hidden = falMode;
+  document.querySelector(".share-option").hidden = hostedMode;
   document.querySelector("#share-song").checked = false;
-  audioDropzone.disabled = falMode;
-  audioReferenceInput.disabled = falMode;
-  if (falMode) {
+  audioDropzone.disabled = hostedMode;
+  audioReferenceInput.disabled = hostedMode;
+  if (hostedMode) {
     clearAudioReference();
-    audioReferenceStatus.textContent = "Reference audio isn't supported by the Fal.ai music endpoint.";
+    audioReferenceStatus.textContent = "Reference audio isn't supported by the Hugging Face music Space.";
   } else {
     audioReferenceStatus.textContent = "";
   }
@@ -655,11 +655,11 @@ async function checkVideoEngine() {
   try {
     const response = await apiFetch("/api/video/health");
     const health = await readApiResponse(response);
-    falMode = health.provider === "fal.ai";
+    hostedMode = health.provider === "huggingface-zerogpu";
     configureGenerationMode();
     videoStatus.textContent = health.ready
-      ? falMode
-        ? "fal.ai is ready. Generation may consume account credits or be billed."
+      ? hostedMode
+        ? "Hugging Face ZeroGPU is configured. Free accounts have a limited daily GPU quota."
         : `Local GPU ready${health.gpu ? ` · ${health.gpu}` : ""}. No app generation cap.`
       : health.message;
   } catch (error) {
@@ -682,7 +682,7 @@ async function pollVideoJob(jobId) {
     document.querySelector("#video-progress-title").textContent = job.status === "queued" ? "Waiting for your turn" : "Making your video";
 
     if (job.status === "complete") {
-      videoStatus.textContent = falMode ? "Your short video is ready." : "Your five-minute video is ready.";
+      videoStatus.textContent = hostedMode ? "Your short video is ready." : "Your five-minute video is ready.";
       videoButton.disabled = false;
       videoButton.querySelector("span:first-child").textContent = "Create another video";
       activeVideoJob = null;
@@ -699,8 +699,8 @@ async function pollVideoJob(jobId) {
       return;
     }
     videoStatus.textContent = job.status === "queued"
-      ? falMode ? "Your video is queued on fal.ai." : "Your video is queued on the local GPU."
-      : falMode ? "fal.ai is rendering your video." : "Your local GPU is rendering the video.";
+      ? hostedMode ? "Your video is queued on Hugging Face ZeroGPU." : "Your video is queued on the local GPU."
+      : hostedMode ? "Hugging Face ZeroGPU is rendering your video." : "Your local GPU is rendering the video.";
     window.setTimeout(() => pollVideoJob(jobId), 5000);
   } catch (error) {
     videoStatus.textContent = `Couldn't check video progress: ${error.message}`;
@@ -865,9 +865,9 @@ videoButton.addEventListener("click", async () => {
     return;
   }
   videoButton.disabled = true;
-  videoButton.querySelector("span:first-child").textContent = falMode ? "Sending to fal.ai…" : "Sending to local GPU…";
-  videoStatus.textContent = falMode
-    ? "Submitting one short video request to fal.ai…"
+  videoButton.querySelector("span:first-child").textContent = hostedMode ? "Sending to Hugging Face…" : "Sending to local GPU…";
+  videoStatus.textContent = hostedMode
+    ? "Submitting one short video request to Hugging Face ZeroGPU…"
     : "Submitting your prompt to the local video engine…";
   videoOutput.hidden = true;
   videoProgress.hidden = true;

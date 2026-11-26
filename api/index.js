@@ -11,13 +11,15 @@ module.exports = async function handler(req, res) {
       ? 403
       : /Connect your wallet|expired|belongs to another wallet/.test(message)
         ? 401
-        : /FAL_KEY/.test(message)
-          ? 503
-          : /timed out|TimeoutError/i.test(message)
-            ? 504
-            : /fal\.ai returned|fal\.ai didn't return|unexpected (?:queue|media) URL|fetch failed/i.test(message)
-              ? 502
-              : 400;
+        : /HTTP 429|daily.*quota|quota.*exceed|ZeroGPU.*quota|too many requests/i.test(message)
+          ? 429
+          : /HF_TOKEN|FROSTWAVE_HF_.*SPACE_URL|FROSTWAVE_ALLOWED_WALLETS|HTTP 401|unauthorized/i.test(message)
+            ? 503
+            : /timed out|TimeoutError/i.test(message)
+              ? 504
+              : /Hugging Face Space|Hugging Face ZeroGPU|unexpected media URL|fetch failed/i.test(message)
+                ? 502
+                : 400;
     return res.status(status).json({ error: message });
   }
 }

@@ -4,14 +4,57 @@ const { getAddress, verifyMessage } = require("ethers");
 const SESSION_TTL_SECONDS = 60 * 60;
 const NONCE_TTL_SECONDS = 5 * 60;
 const MAX_SAVED_JOBS = 10;
-const VIDEO_MODEL = "minimax/h3-max/text-to-video";
-const MUSIC_MODEL = "fal-ai/ace-step";
-const QUEUE_ROOT = "https://queue.fal.run";
+const VIDEO_SPACE_DEFAULT = "https://upsampler-wan-2-2-14b-text-to-video.hf.space";
+const MUSIC_SPACE_DEFAULT = "https://ace-step-ace-step-v1-5.hf.space";
+const VIDEO_MODEL = "Wan 2.2 14B · Hugging Face ZeroGPU (3.5 seconds)";
+const MUSIC_MODEL = "ACE-Step v1.5 · Hugging Face ZeroGPU";
+const SPACE_REQUEST_TIMEOUT_MS = 7_000;
+
+function walletAllowlist() {
+  const configured = process.env.FROSTWAVE_ALLOWED_WALLETS || process.env.FROSTWAVE_ALLOWED_WALLET;
+  if (!configured?.trim()) return null;
+  const addresses = configured.split(",").map((address) => address.trim()).filter(Boolean);
+  if (!addresses.length || addresses.some((address) => !/^0x[0-9a-f]{40}$/i.test(address))) {
+    throw new Error("FROSTWAVE_ALLOWED_WALLETS must contain valid comma-separated EVM wallet addresses.");
+  }
+  try {
+    return new Set(addresses.map((address) => getAddress(address).toLowerCase()));
+  } catch {
+    throw new Error("FROSTWAVE_ALLOWED_WALLETS must contain valid EVM wallet addresses.");
+  }
+}
+
+function assertWalletAllowed(address) {
+  const allowlist = walletAllowlist();
+  if (allowlist && !allowlist.has(address.toLowerCase())) {
+    throw new Error("This wallet isn't allowed to use generation.");
+  }
+}
 
 function secret() {
-  const key = process.env.FAL_KEY;
-  if (!key) throw new Error("Fal.ai isn't configured. Add FAL_KEY to the Vercel environment variables and redeploy.");
+  const key = process.env.HF_TOKEN?.trim();
+  if (!key) throw new Error("Set HF_TOKEN in Vercel to a Hugging Face read token, then redeploy.");
   return createHmac("sha256", key).update("frostwave-vercel-session-v1").digest();
+}
+
+function spaceBase(kind) {
+  const configured = kind === "video"
+    ? process.env.FROSTWAVE_HF_VIDEO_SPACE_URL
+    : process.env.FROSTWAVE_HF_MUSIC_SPACE_URL;
+  const parsed = new URL(configured || (kind === "video" ? VIDEO_SPACE_DEFAULT : MUSIC_SPACE_DEFAULT));
+  if (
+    parsed.protocol !== "https:"
+    || !parsed.hostname.toLowerCase().endsWith(".hf.space")
+    || parsed.port
+    || parsed.username
+    || parsed.password
+    || (parsed.pathname !== "/" && parsed.pathname !== "")
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw new Error(`FROSTWAVE_HF_${kind.toUpperCase()}_SPACE_URL must be an HTTPS Hugging Face Space origin.`);
+  }
+  return parsed.origin;
 }
 
 function mac(value) {
@@ -78,6 +121,7 @@ function getAddressFromToken(req) {
   ) {
     throw new Error("Your sign-in expired. Connect your wallet again.");
   }
+  assertWalletAllowed(claims.address);
   return claims.address;
 }
 
@@ -95,111 +139,186 @@ function getJob(req, kind, expectedAddress) {
     || job.kind !== kind
     || job.address !== expectedAddress
     || typeof job.requestId !== "string"
-    || !/^[a-zA-Z0-9-]{8,128}$/.test(job.requestId)
+    || !/^[a-zA-Z0-9._-]{8,128}$/.test(job.requestId)
+    || typeof job.spaceUrl !== "string"
+    || typeof job.apiName !== "string"
     || !Number.isSafeInteger(job.createdAt)
   ) {
     throw new Error("This generation job is invalid or belongs to another wallet.");
   }
+  if (job.spaceUrl !== spaceBase(kind)) throw new Error("This generation job belongs to another provider.");
+  const expectedApiName = kind === "video" ? "generate_video" : "generation_wrapper";
+  if (job.apiName !== expectedApiName) throw new Error("This generation job has an invalid provider endpoint.");
   return job;
 }
 
-function makeJobId(kind, address, requestId, metadata) {
+function makeJobId(kind, address, eventId, metadata) {
   return encodeSigned({
     type: "job",
     kind,
     address,
-    requestId,
+    requestId: eventId,
     createdAt: Math.floor(Date.now() / 1000),
     ...metadata,
   });
 }
 
-async function falRequest(url, method = "GET", payload) {
-  const response = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Key ${process.env.FAL_KEY}`,
-      ...(payload ? { "Content-Type": "application/json" } : {}),
-    },
-    ...(payload ? { body: JSON.stringify(payload) } : {}),
-    signal: AbortSignal.timeout(8_000),
+function spaceHeaders(json = false) {
+  return {
+    ...(process.env.HF_TOKEN?.trim() ? { Authorization: `Bearer ${process.env.HF_TOKEN.trim()}` } : {}),
+    ...(json ? { "Content-Type": "application/json" } : {}),
+  };
+}
+
+async function submitSpaceJob(kind, data) {
+  const base = spaceBase(kind);
+  const apiName = kind === "video" ? "generate_video" : "generation_wrapper";
+  const response = await fetch(`${base}/gradio_api/call/${apiName}`, {
+    method: "POST",
+    headers: spaceHeaders(true),
+    body: JSON.stringify({ data }),
+    signal: AbortSignal.timeout(SPACE_REQUEST_TIMEOUT_MS),
   });
-  const body = await response.json().catch(() => null);
+  const responseText = await response.text();
+  let result;
+  try {
+    result = JSON.parse(responseText);
+  } catch {
+    result = null;
+  }
   if (!response.ok) {
-    const detail = body?.detail || body?.error || body?.message;
-    throw new Error(typeof detail === "string" ? detail.slice(0, 1000) : `fal.ai returned HTTP ${response.status}.`);
+    const detail = result?.detail || result?.error || result?.message;
+    const message = typeof detail === "string"
+      ? detail.slice(0, 1000)
+      : responseText.slice(0, 1000) || "Request failed.";
+    throw new Error(`Hugging Face Space returned HTTP ${response.status}: ${message}`);
   }
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new Error("fal.ai returned an invalid response.");
+  if (!result || typeof result.event_id !== "string" || !/^[A-Za-z0-9._-]{8,128}$/.test(result.event_id)) {
+    throw new Error("Hugging Face Space didn't return a valid generation event ID.");
   }
-  return body;
+  return { base, apiName, eventId: result.event_id };
 }
 
-function queueUrl(value) {
-  if (typeof value !== "string") throw new Error("fal.ai didn't return a valid queue URL.");
-  const parsed = new URL(value);
-  if (parsed.protocol !== "https:" || parsed.hostname !== "queue.fal.run" || parsed.port) {
-    throw new Error("fal.ai returned an unexpected queue URL.");
+function parseSpaceEvent(block) {
+  const lines = block.split(/\r?\n/);
+  const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+  const data = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
+  if (!data) return null;
+  let payload;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    throw new Error("Hugging Face Space returned an invalid event.");
   }
-  return value;
+  const message = payload?.msg;
+  if (event === "error" || message === "process_errored" || payload?.success === false) {
+    const detail = payload?.error || payload?.output?.error || payload?.message;
+    throw new Error(typeof detail === "string" ? detail.slice(0, 1000) : "Hugging Face ZeroGPU couldn't complete the generation.");
+  }
+  if (event === "complete" || message === "process_completed") return payload;
+  return null;
 }
 
-function mediaUrl(value) {
-  if (typeof value !== "string") throw new Error("fal.ai didn't return a media URL.");
-  const parsed = new URL(value);
-  const host = parsed.hostname.toLowerCase();
+async function readSpaceEvent(job) {
+  const url = `${job.spaceUrl}/gradio_api/call/${job.apiName}/${encodeURIComponent(job.requestId)}`;
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { ...spaceHeaders(), Accept: "text/event-stream" },
+      signal: AbortSignal.timeout(SPACE_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error?.name === "TimeoutError" || error?.name === "AbortError") return null;
+    throw error;
+  }
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 1000);
+    throw new Error(`Hugging Face Space returned HTTP ${response.status}${detail ? `: ${detail}` : "."}`);
+  }
+  if (!response.body) throw new Error("Hugging Face Space returned an empty event stream.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return buffer ? parseSpaceEvent(buffer) : null;
+      buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > 1_000_000) throw new Error("Hugging Face Space returned an oversized event.");
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() || "";
+      for (const block of blocks) {
+        const event = parseSpaceEvent(block);
+        if (event) return event;
+      }
+    }
+  } catch (error) {
+    if (error?.name === "TimeoutError" || error?.name === "AbortError") return null;
+    throw error;
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+function eventOutput(event) {
+  return event?.output?.data || event?.data || event?.output || event;
+}
+
+function findMediaFile(event, kind, base) {
+  const output = eventOutput(event);
+  const first = Array.isArray(output) ? output[0] : output;
+  const value = typeof first === "string" ? first : first?.url;
+  if (typeof value !== "string" || !value) {
+    throw new Error("Hugging Face Space completed without returning a media file.");
+  }
+  const parsed = new URL(value, base);
+  const expected = new URL(base);
   if (
     parsed.protocol !== "https:"
-    || !(host === "fal.media" || host.endsWith(".fal.media") || host === "storage.googleapis.com")
+    || parsed.origin !== expected.origin
     || parsed.username
     || parsed.password
     || parsed.port
   ) {
-    throw new Error("fal.ai returned an unexpected media URL.");
+    throw new Error("Hugging Face Space returned an unexpected media URL.");
   }
-  return value;
+  const expectedExtension = kind === "video" ? /\.(mp4|webm)(?:$|[?#])/i : /\.(mp3|wav|flac|ogg)(?:$|[?#])/i;
+  if (!expectedExtension.test(parsed.pathname + parsed.search)) {
+    throw new Error("Hugging Face Space returned a media URL with an unexpected file type.");
+  }
+  return parsed.toString();
 }
 
 async function readJobStatus(job, includeMedia = false) {
-  const statusUrl = queueUrl(job.statusUrl);
-  const status = await falRequest(statusUrl);
-  const state = status.status;
-  if (state === "COMPLETED") {
-    if (!includeMedia) {
-      return {
-        status: "complete",
-        progress: 100,
-        completed_clips: job.kind === "video" ? 1 : undefined,
-        total_clips: job.kind === "video" ? 1 : undefined,
-        message: job.kind === "video" ? "Your short video is ready." : "Your song is ready.",
-      };
-    }
-    const result = await falRequest(queueUrl(job.responseUrl));
-    const file = job.kind === "video" ? result.video : result.audio;
-    const url = mediaUrl(file?.url);
+  const event = await readSpaceEvent(job);
+  if (!event) {
+    const queued = Date.now() / 1000 - job.createdAt < 30;
     return {
-      status: "complete",
-      progress: 100,
-      completed_clips: job.kind === "video" ? 1 : undefined,
-      total_clips: job.kind === "video" ? 1 : undefined,
-      message: job.kind === "video" ? "Your short video is ready." : "Your song is ready.",
-      media_url: url,
+      status: queued ? "queued" : "rendering",
+      progress: queued ? 0 : 25,
+      message: queued
+        ? "Waiting in Hugging Face ZeroGPU's queue."
+        : "Hugging Face ZeroGPU is generating your media.",
     };
   }
-  if (state === "FAILED" || state === "CANCELLED") {
-    const detail = status.error || status.message;
+  const output = eventOutput(event);
+  if (event?.success === false || event?.output?.error) {
+    const detail = event.output?.error || event.error || event.message;
     return {
       status: "failed",
       progress: 0,
-      message: typeof detail === "string" ? detail.slice(0, 1000) : `fal.ai request ${state.toLowerCase()}.`,
+      message: typeof detail === "string" ? detail.slice(0, 1000) : "Hugging Face ZeroGPU couldn't complete the generation.",
     };
   }
-  const queued = state === "IN_QUEUE";
-  return {
-    status: queued ? "queued" : "rendering",
-    progress: queued ? 0 : 25,
-    message: queued ? "Waiting in the fal.ai queue." : "fal.ai is generating your media.",
+  const result = {
+    status: "complete",
+    progress: 100,
+    completed_clips: job.kind === "video" ? 1 : undefined,
+    total_clips: job.kind === "video" ? 1 : undefined,
+    message: job.kind === "video" ? "Your short video is ready." : "Your song is ready.",
   };
+  if (includeMedia) result.media_url = findMediaFile({ output }, job.kind, job.spaceUrl);
+  return result;
 }
 
 function challengeMessage(origin, address, chainId, nonce, issuedAt, expiresAt) {
@@ -218,6 +337,7 @@ async function handleAuth(req, res, path) {
       throw new Error("The connected wallet returned an invalid chain ID.");
     }
     const address = getAddress(body.address);
+    assertWalletAllowed(address);
     const issued = Math.floor(Date.now() / 1000);
     const nonce = encodeSigned({
       type: "nonce",
@@ -296,14 +416,31 @@ function parseJobIds(value) {
 
 async function handleVideo(req, res, path) {
   if (path === "/api/video/health" && req.method === "GET") {
-    const configured = Boolean(process.env.FAL_KEY?.trim());
+    const configured = Boolean(process.env.HF_TOKEN?.trim());
+    let spacesConfigured = true;
+    let walletConfigValid = true;
+    try {
+      spaceBase("video");
+      spaceBase("music");
+    } catch {
+      spacesConfigured = false;
+    }
+    try {
+      walletAllowlist();
+    } catch {
+      walletConfigValid = false;
+    }
     return res.status(200).json({
-      ready: configured,
-      provider: "fal.ai",
+      ready: configured && spacesConfigured && walletConfigValid,
+      provider: "huggingface-zerogpu",
       gpu: null,
-      message: configured
-        ? "fal.ai is ready. Generation may consume account credits or be billed."
-        : "Add FAL_KEY to the Vercel environment variables, then redeploy.",
+      message: !configured
+        ? "Add HF_TOKEN to Vercel as a secret, then redeploy."
+        : !spacesConfigured
+          ? "Set valid HTTPS Hugging Face Space URLs in Vercel, then redeploy."
+          : !walletConfigValid
+            ? "Check the configured EVM wallet allowlist."
+            : "Hugging Face ZeroGPU is configured. Free accounts have a limited daily GPU quota; provider availability can vary.",
       queued_jobs: 0,
     });
   }
@@ -321,34 +458,35 @@ async function handleVideo(req, res, path) {
       "Stop motion": "Tactile stop-motion animation, handcrafted miniature textures",
       Photoreal: "Photorealistic imagery, natural materials and believable movement",
     };
-    const ratios = { landscape: "16:9", portrait: "9:16", square: "1:1" };
+    const spaceRatios = {
+      landscape: "16:9 (832x480)",
+      portrait: "9:16 (480x832)",
+      square: "1:1 (640x640)",
+    };
     if (typeof prompt !== "string" || !prompt.trim() || prompt.trim().length > 1000) throw new Error("Describe the video you want to make.");
-    if (!ratios[format]) throw new Error("Choose landscape, portrait, or square format.");
+    if (!spaceRatios[format]) throw new Error("Choose landscape, portrait, or square format.");
     if (!styles[style]) throw new Error("Choose one of the available visual styles.");
-    const request = await falRequest(`${QUEUE_ROOT}/${VIDEO_MODEL}`, "POST", {
-      prompt: `${prompt.trim()} Visual style: ${styles[style]}`,
-      duration: 5,
-      resolution: "480P",
-      aspect_ratio: ratios[format],
-      prompt_expansion_mode: "disabled",
-      enable_safety_checker: true,
-    });
-    if (typeof request.request_id !== "string") throw new Error("fal.ai didn't return a valid video request ID.");
-    const statusUrl = queueUrl(request.status_url);
-    const responseUrl = queueUrl(request.response_url);
-    const id = makeJobId("video", address, request.request_id, {
-      statusUrl,
-      responseUrl,
-    });
+    const { base, apiName, eventId } = await submitSpaceJob("video", [
+      `${prompt.trim()} Visual style: ${styles[style]}`,
+      spaceRatios[format],
+      4,
+      "low quality, blur, watermark, text",
+      3.5,
+      1,
+      1,
+      42,
+      true,
+    ]);
+    const id = makeJobId("video", address, eventId, { spaceUrl: base, apiName });
     return res.status(202).json({
       id,
-      model: "MiniMax H3 Max · fal.ai (5 seconds)",
+      model: VIDEO_MODEL,
       prompt: prompt.trim(),
       status: "queued",
       progress: 0,
       completed_clips: 0,
       total_clips: 1,
-      message: "Waiting in the fal.ai queue.",
+      message: "Waiting in Hugging Face ZeroGPU's queue.",
       created_at: Math.floor(Date.now() / 1000),
     });
   }
@@ -357,7 +495,7 @@ async function handleVideo(req, res, path) {
       const job = decodeSigned(id);
       if (job.type !== "job" || job.kind !== "video" || job.address !== address) return null;
       const result = await readJobStatus(job);
-      return { id, model: "MiniMax H3 Max · fal.ai (5 seconds)", ...result };
+      return { id, model: VIDEO_MODEL, ...result };
     }));
     return res.status(200).json({ jobs: jobs.filter(Boolean) });
   }
@@ -367,7 +505,7 @@ async function handleVideo(req, res, path) {
     const result = await readJobStatus(job);
     return res.status(200).json({
       id: decodeURIComponent(match[1]),
-      model: "MiniMax H3 Max · fal.ai (5 seconds)",
+      model: VIDEO_MODEL,
       total_clips: 1,
       completed_clips: result.completed_clips || 0,
       ...result,
@@ -385,7 +523,7 @@ async function handleVideo(req, res, path) {
 async function handleMusic(req, res, path) {
   const address = getAddressFromToken(req);
   if (path === "/api/music/uploads" && (req.method === "POST" || req.method === "DELETE")) {
-    throw new Error("Fal.ai music generation doesn't support reference audio uploads.");
+    throw new Error("Reference audio uploads aren't supported by the Hugging Face music Space.");
   }
   if (path === "/api/music/jobs" && req.method === "POST") {
     const body = requireBody(req);
@@ -404,20 +542,63 @@ async function handleMusic(req, res, path) {
       throw new Error("Add lyrics, or choose Instrumental.");
     }
     if (typeof body.lyrics === "string" && body.lyrics.length > 4000) throw new Error("Lyrics must be 4,000 characters or fewer.");
-    if (body.reference_audio_id) throw new Error("Fal.ai music generation doesn't support reference audio uploads.");
+    if (body.reference_audio_id) throw new Error("Reference audio uploads aren't supported by the Hugging Face music Space.");
     const prompt = body.prompt.trim();
     const genre = body.genre.trim();
     const tags = `${genre}, ${prompt}${body.vocal_style === "Instrumental" ? ", instrumental, no vocals" : ""}`;
     const lyrics = body.vocal_style === "Instrumental" ? "[inst]" : body.lyrics.trim();
-    const request = await falRequest(`${QUEUE_ROOT}/${MUSIC_MODEL}`, "POST", {
+    const musicArguments = [
+      "acestep-v15-xl-turbo",
+      "custom",
+      null,
+      "unknown",
       tags,
       lyrics,
-      duration: body.duration,
-      enable_safety_checker: true,
-    });
-    if (typeof request.request_id !== "string") throw new Error("fal.ai didn't return a valid music request ID.");
-    const statusUrl = queueUrl(request.status_url);
-    const responseUrl = queueUrl(request.response_url);
+      0,
+      "",
+      "",
+      "unknown",
+      8,
+      7,
+      true,
+      "-1",
+      null,
+      body.duration,
+      1,
+      null,
+      "",
+      0,
+      -1,
+      "Fill the audio semantic mask based on the given conditions:",
+      1,
+      "text2music",
+      false,
+      0,
+      1,
+      3,
+      "ode",
+      "",
+      "mp3",
+      0.85,
+      true,
+      2,
+      0,
+      0.9,
+      "NO USER INPUT",
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      0.5,
+      8,
+      null,
+      [],
+      false,
+    ];
+    const { base, apiName, eventId } = await submitSpaceJob("music", musicArguments);
     const publicJob = {
       title: body.title.trim(),
       genre,
@@ -428,12 +609,12 @@ async function handleMusic(req, res, path) {
       artist: `${address.slice(0, 6)}…${address.slice(-4)}`,
       audio_url: null,
     };
-    const id = makeJobId("music", address, request.request_id, { statusUrl, responseUrl });
+    const id = makeJobId("music", address, eventId, { spaceUrl: base, apiName });
     return res.status(202).json({
       id,
       ...publicJob,
       status: "queued",
-      message: "Waiting in the fal.ai queue.",
+      message: "Waiting in Hugging Face ZeroGPU's queue.",
       created_at: Math.floor(Date.now() / 1000),
     });
   }
