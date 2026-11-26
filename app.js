@@ -548,7 +548,7 @@ createButton.addEventListener("click", async () => {
     await loadMusicJobs();
     pollMusicJob(job.id);
     messageArea.textContent = hostedMode
-      ? "Your song is queued on Hugging Face ZeroGPU. Free accounts have a limited daily GPU quota; follow progress in Your library."
+      ? "Your song is queued on public Hugging Face ZeroGPU. Anonymous usage is limited and may be shared; follow progress in Your library."
       : "Your song is queued on your local GPU. You can follow its progress in Your library.";
   } catch (error) {
     messageArea.textContent = error.message;
@@ -607,25 +607,25 @@ function configureGenerationMode() {
     ? "Describe a moment and create one short video clip with Wan 2.2."
     : "Describe a world, a moment, or a story. Shape a five-minute video from your imagination, rendered on your own GPU.";
   document.querySelector("#video-generation-cost").textContent = hostedMode
-    ? "Hugging Face ZeroGPU · free daily quota"
+    ? "Hugging Face ZeroGPU · anonymous free quota"
     : "Free · No usage limits";
   document.querySelector(".video-free-note strong").textContent = hostedMode
-    ? "Hugging Face ZeroGPU has a limited daily GPU quota."
+    ? "Public Hugging Face ZeroGPU has a very limited anonymous daily quota."
     : "No service fees or app quotas.";
   document.querySelector(".video-free-note p").textContent = hostedMode
-    ? "Each request creates one short clip. The free quota is shared with music generation and may run out for the day."
+    ? "Each request creates one short clip. About 2 GPU minutes/day are available anonymously, shared across music and video, with low queue priority."
     : "Choose from five open models. Rendering runs locally on your GPU and uses your electricity and disk space.";
   document.querySelector(".video-backend-note p").textContent = hostedMode
-    ? "Wan 2.2 generates one short clip per request through Hugging Face ZeroGPU. Free accounts have a limited daily GPU quota; queue availability depends on Hugging Face."
+    ? "Wan 2.2 generates one short clip per request through public Hugging Face ZeroGPU. Anonymous GPU time is very limited and queue priority is low."
     : "Five-minute videos are assembled from short generated shots and trimmed to exactly five minutes. Rendering is sequential and can take hours; the selected model's weights download the first time you use it. The local queue has no app-imposed generation cap.";
   document.querySelector("#music-generation-cost").textContent = hostedMode
-    ? "Hugging Face ZeroGPU · free daily quota"
+    ? "Hugging Face ZeroGPU · anonymous free quota"
     : "Free to create";
   document.querySelector(".free-label .no-limits").textContent = hostedMode
     ? "· Daily GPU quota is limited"
     : "· No credits or paywalls";
   document.querySelector(".free-note div span").textContent = hostedMode
-    ? "Free Hugging Face ZeroGPU quota may run out."
+    ? "Shared anonymous Hugging Face ZeroGPU capacity may run out."
     : "Every creative tool is free.";
   document.querySelector(".share-option").hidden = hostedMode;
   document.querySelector("#share-song").checked = false;
@@ -659,7 +659,7 @@ async function checkVideoEngine() {
     configureGenerationMode();
     videoStatus.textContent = health.ready
       ? hostedMode
-        ? "Hugging Face ZeroGPU is configured. Free accounts have a limited daily GPU quota."
+        ? "Public Hugging Face ZeroGPU is configured. Anonymous quota is limited and queue priority is low."
         : `Local GPU ready${health.gpu ? ` · ${health.gpu}` : ""}. No app generation cap.`
       : health.message;
   } catch (error) {
@@ -699,7 +699,7 @@ async function pollVideoJob(jobId) {
       return;
     }
     videoStatus.textContent = job.status === "queued"
-      ? hostedMode ? "Your video is queued on Hugging Face ZeroGPU." : "Your video is queued on the local GPU."
+      ? hostedMode ? "Your video is queued on public Hugging Face ZeroGPU." : "Your video is queued on the local GPU."
       : hostedMode ? "Hugging Face ZeroGPU is rendering your video." : "Your local GPU is rendering the video.";
     window.setTimeout(() => pollVideoJob(jobId), 5000);
   } catch (error) {

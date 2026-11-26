@@ -140,7 +140,7 @@ test("Vercel catch-all routes health and returns auth failures as 401", async ()
   assert.equal(jobsResponse.statusCode, 401);
 });
 
-test("Hugging Face video requests use the server token and return signed job IDs", async () => {
+test("Hugging Face video requests use the public Space without sending the account token", async () => {
   const calls = [];
   global.fetch = async (url, options) => {
     calls.push({ url: String(url), options });
@@ -160,17 +160,19 @@ test("Hugging Face video requests use the server token and return signed job IDs
   assert.match(response.body.id, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "https://video-space.hf.space/gradio_api/call/generate_video");
-  assert.equal(calls[0].options.headers.Authorization, "Bearer test-hf-token");
+  assert.equal(calls[0].options.headers.Authorization, undefined);
   const videoArgs = JSON.parse(calls[0].options.body).data;
   assert.equal(videoArgs[0], "A quiet lake Visual style: Dreamlike atmosphere, soft light, surreal but coherent visual details");
   assert.equal(videoArgs[4], 3.5);
 });
 
 test("video queue status returns only the generated media URL", async () => {
+  const statusCalls = [];
   global.fetch = async (url, options) => {
     if (options?.method === "POST") {
       return new Response(JSON.stringify({ event_id: "223e4567-e89b-12d3-a456-426614174000" }), { status: 200 });
     }
+    statusCalls.push({ url: String(url), options });
     return new Response(
       'event: complete\ndata: {"msg":"process_completed","output":{"data":[{"path":"/tmp/generated.mp4","url":"https://video-space.hf.space/gradio_api/file=/tmp/generated.mp4"},42]},"success":true}\n\n',
       { status: 200, headers: { "Content-Type": "text/event-stream" } },
@@ -187,6 +189,7 @@ test("video queue status returns only the generated media URL", async () => {
   });
   assert.equal(ticketResponse.statusCode, 200);
   assert.equal(ticketResponse.body.video_url, "https://video-space.hf.space/gradio_api/file=/tmp/generated.mp4");
+  assert.equal(statusCalls[0].options.headers.Authorization, undefined);
 });
 
 test("Hugging Face quota errors are reported as rate limits", async () => {
@@ -225,6 +228,7 @@ test("Hugging Face music requests use ACE-Step and preserve private metadata", a
   assert.equal(response.body.is_public, false);
   assert.equal(response.body.duration, 60);
   assert.equal(submission.url, "https://music-space.hf.space/gradio_api/call/generation_wrapper");
+  assert.equal(submission.options.headers.Authorization, undefined);
   const musicArgs = JSON.parse(submission.options.body).data;
   assert.equal(musicArgs.length, 49);
   assert.match(musicArgs[4], /Ambient, A gentle melody/);

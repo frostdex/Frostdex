@@ -165,7 +165,6 @@ function makeJobId(kind, address, eventId, metadata) {
 
 function spaceHeaders(json = false) {
   return {
-    ...(process.env.HF_TOKEN?.trim() ? { Authorization: `Bearer ${process.env.HF_TOKEN.trim()}` } : {}),
     ...(json ? { "Content-Type": "application/json" } : {}),
   };
 }
@@ -440,7 +439,7 @@ async function handleVideo(req, res, path) {
           ? "Set valid HTTPS Hugging Face Space URLs in Vercel, then redeploy."
           : !walletConfigValid
             ? "Check the configured EVM wallet allowlist."
-            : "Hugging Face ZeroGPU is configured. Free accounts have a limited daily GPU quota; provider availability can vary.",
+            : "Public Hugging Face ZeroGPU access is configured. Anonymous quota is limited and queue priority is low.",
       queued_jobs: 0,
     });
   }
