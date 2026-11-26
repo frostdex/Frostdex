@@ -1,35 +1,56 @@
-# Frostwave
+# Frostwave Studio
 
-Frostwave deploys its static frontend and same-origin Node API functions to Vercel. The functions verify wallet signatures and submit video and music generation jobs to public Hugging Face ZeroGPU Spaces: Wan 2.2 for short videos and ACE-Step v1.5 for music. No separate Python API host or `FROSTWAVE_API_URL` is needed for this deployment.
+Frostwave Studio is a Next.js App Router application for generating music with ACE-Step through deAPI and text-to-video through a video model enabled for your deAPI account. Generation runs on deAPI, not on Vercel.
+
+## Run locally
+
+```sh
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+Open `http://localhost:3000`. In Codespaces, forward port 3000.
+
+The app can use a key saved in the Settings dialog (stored in this browser's local storage) or the server-side `DEAPI_API_KEY` environment variable. The browser-stored key is sent to this app's API routes over HTTPS and is not saved by the server.
 
 ## Deploy on Vercel
 
-1. Import this GitHub repository into Vercel. The included build creates the static files in `dist`; functions under `api/` are deployed alongside them.
-2. In Vercel **Project Settings → Environment Variables**, set:
-   - `HF_TOKEN`: a Hugging Face token used only to sign Frostwave wallet sessions. Mark it as a secret; it is not sent to the public generation Spaces.
-   - `FROSTWAVE_WALLETCONNECT_PROJECT_ID`: your public project ID from [Reown Cloud](https://cloud.reown.com/), if it is not already set.
-   - Optionally set `FROSTWAVE_HF_VIDEO_SPACE_URL` and `FROSTWAVE_HF_MUSIC_SPACE_URL` to different HTTPS Hugging Face Space origins. Defaults are the Wan 2.2 and ACE-Step Spaces listed below.
-   - Optionally set `FROSTWAVE_ALLOWED_WALLETS` to comma-separated public wallet addresses. If unset, any connected EVM wallet can sign in. Remove an existing `FROSTWAVE_ALLOWED_WALLET` value from Vercel to allow all users; that older setting is still honored when present.
-3. Redeploy after saving the variables. The API is same-origin at `https://wave-xi-ten.vercel.app/api/...`; do not set `FROSTWAVE_API_URL` or `FAL_KEY` for this Vercel integration.
+1. Import this repository into Vercel and use the repository root as the project root. The Vercel project framework must be **Next.js**, the build command should be `npm run build`, and the output-directory override should be empty/default.
+2. In **Project Settings → Environment Variables**, add:
+   - `DEAPI_API_KEY` — optional shared server-side deAPI key. Create one in the deAPI dashboard and mark this variable sensitive.
+   - `DEAPI_MUSIC_MODEL` — optional. Defaults to `AceStep_1_5_XL_Turbo_INT8`.
+   - `DEAPI_VIDEO_MODEL` — optional model slug enabled for text-to-video on your deAPI account. If unset, the server selects an enabled model that supports the requested duration and format.
+3. Redeploy after saving environment variables and updating the project build settings from the previous static-site configuration.
 
-The default public Spaces are [ACE-Step v1.5](https://huggingface.co/spaces/ACE-Step/Ace-Step-v1.5) and [Wan 2.2 text-to-video](https://huggingface.co/spaces/Upsampler/wan-2-2-14b-text-to-video). Requests are sent without a Hugging Face account token, so they use the documented unauthenticated ZeroGPU tier (2 GPU minutes per day, low queue priority), not the `HF_TOKEN` account quota. Since all visitors' requests pass through this Vercel deployment, anonymous capacity may be shared or rate-limited and is not guaranteed. Queue availability and the public Spaces themselves are controlled by their owners and may change or become unavailable. One video request creates a single 3.5-second clip. Reference-audio uploads are not supported.
+If `DEAPI_API_KEY` is configured, every visitor who can access the site can submit jobs using that account's credits. Before adding it, create a restricted API key with a spending limit in deAPI. Alternatively, leave it unset and let each person provide their own key in Settings.
 
-## What is and isn't stored
+deAPI uses paid inference credits. New eligible accounts may receive a limited sign-up bonus, but it is not guaranteed or unlimited. Check the current balance and pricing in your deAPI account. The application does not use Agnes or Hugging Face keys.
 
-- Wallet jobs and favorites are stored in the current browser's local storage. They are not shared across browsers or devices; clearing browser data removes them.
-- Discover sharing is disabled because this setup has no shared database.
-- Wallet sessions are stateless and last one hour. Signing out clears the browser session but cannot revoke a copied token server-side. Sign-in challenges expire after five minutes; without a database they are not recorded as one-time-use.
-- Generated media is served from the public Hugging Face Spaces and may be temporary. Follow their terms and retention behavior for generated files.
+## Features
 
-## Optional local Python engine
+- Music prompt, optional section-marked lyrics, and 30–300 second duration.
+- Text-to-video prompt, 4/5/6/8/10/12 second duration, and landscape or portrait ratio.
+- Asynchronous job polling with audio/video players and download links.
+- Recent generation history stored in this browser only.
+- Local Settings dialog for a personal deAPI key.
 
-The original Python service remains available for local GPU generation. Install `requirements.txt`; for video or ACE-Step music generation, also install a CUDA-enabled PyTorch build and `requirements-gpu.txt`. Set `FROSTWAVE_BIND_HOST=127.0.0.1`, `FROSTWAVE_PORT=8000`, and run `python server.py`.
+Generated media URLs and provider job availability are controlled by deAPI and may expire. Clearing local browser data removes the saved history and personal API key.
 
-## Tests and build
+## Environment variables
+
+Copy `.env.example` to `.env.local` for local development. Do not commit `.env.local` or expose `DEAPI_API_KEY` through a `NEXT_PUBLIC_` variable.
+
+## Checks
 
 ```sh
-node --check app.js
+npm run typecheck
 npm run build
-npm run test:api
-python3 -m unittest discover -s tests
 ```
+
+## Provider documentation
+
+- [deAPI quickstart and key setup](https://docs.deapi.ai/quickstart)
+- [deAPI text-to-music API](https://docs.deapi.ai/api/v2/audio/music)
+- [deAPI text-to-video API](https://docs.deapi.ai/api/v2/videos/generations)
+- [deAPI job polling](https://docs.deapi.ai/api/v2/utilities/jobs)
